@@ -90,7 +90,7 @@ describe('AluguelProvider', () => {
       vi.setSystemTime(new Date('2026-03-05T10:00:00'));
       const mockPage = makeValidPage('Locacao: Contrato - 1230103 10-03-2026 3.059,19  0,00');
 
-      await provider.login(mockPage as unknown as Page, {});
+      await provider.findPendingBoleto(mockPage as unknown as Page);
 
       const expectedPid = Buffer.from('34849').toString('base64');
       expect(mockPage.goto).toHaveBeenCalledWith(
@@ -103,7 +103,7 @@ describe('AluguelProvider', () => {
       vi.setSystemTime(new Date('2026-04-02T10:00:00'));
       const mockPage = makeValidPage();
 
-      await provider.login(mockPage as unknown as Page, {});
+      await provider.findPendingBoleto(mockPage as unknown as Page);
 
       const expectedPid = Buffer.from('34850').toString('base64');
       expect(mockPage.goto).toHaveBeenCalledWith(
@@ -116,7 +116,7 @@ describe('AluguelProvider', () => {
       vi.setSystemTime(new Date('2026-05-03T10:00:00'));
       const mockPage = makeValidPage('Locacao: Contrato - 1230103 10-05-2026 3.059,19  0,00');
 
-      await provider.login(mockPage as unknown as Page, {});
+      await provider.findPendingBoleto(mockPage as unknown as Page);
 
       const expectedPid = Buffer.from('34851').toString('base64');
       expect(mockPage.goto).toHaveBeenCalledWith(
@@ -129,7 +129,7 @@ describe('AluguelProvider', () => {
       vi.setSystemTime(new Date('2027-03-05T10:00:00'));
       const mockPage = makeValidPage('Locacao: Contrato - 1230103 10-03-2027 3.059,19  0,00');
 
-      await provider.login(mockPage as unknown as Page, {});
+      await provider.findPendingBoleto(mockPage as unknown as Page);
 
       const expectedPid = Buffer.from('34861').toString('base64');
       expect(mockPage.goto).toHaveBeenCalledWith(
@@ -143,7 +143,7 @@ describe('AluguelProvider', () => {
       vi.setSystemTime(new Date('2026-04-15T10:00:00'));
       const mockPage = makeValidPage('Locacao: Contrato - 1230103 10-05-2026 3.059,19  0,00');
 
-      await provider.login(mockPage as unknown as Page, {});
+      await provider.findPendingBoleto(mockPage as unknown as Page);
 
       const expectedPid = Buffer.from('34851').toString('base64');
       expect(mockPage.goto).toHaveBeenCalledWith(
@@ -155,7 +155,7 @@ describe('AluguelProvider', () => {
 
   // ─── login() probe behaviour ───────────────────────────────────────────────
 
-  describe('login()', () => {
+  describe('findPendingBoleto()', () => {
     it('skips pages that do not show the dropdown (invalid PID)', async () => {
       vi.setSystemTime(new Date('2026-04-02T10:00:00'));
 
@@ -178,7 +178,7 @@ describe('AluguelProvider', () => {
         once: vi.fn(),
       };
 
-      await provider.login(mockPage as unknown as Page, {});
+      await provider.findPendingBoleto(mockPage as unknown as Page);
 
       expect(mockPage.goto).toHaveBeenCalledTimes(2);
     });
@@ -208,7 +208,7 @@ describe('AluguelProvider', () => {
         once: vi.fn(),
       };
 
-      await provider.login(mockPage as unknown as Page, {});
+      await provider.findPendingBoleto(mockPage as unknown as Page);
 
       expect(mockPage.goto).toHaveBeenCalledTimes(2);
     });
@@ -238,7 +238,7 @@ describe('AluguelProvider', () => {
         once: vi.fn(),
       };
 
-      await provider.login(mockPage as unknown as Page, {});
+      await provider.findPendingBoleto(mockPage as unknown as Page);
 
       expect(mockPage.goto).toHaveBeenCalledTimes(2);
     });
@@ -255,14 +255,14 @@ describe('AluguelProvider', () => {
       };
 
       await expect(
-        provider.login(mockPage as unknown as Page, {}),
+        provider.findPendingBoleto(mockPage as unknown as Page),
       ).rejects.toThrow('Nenhum boleto pendente encontrado');
     });
   });
 
-  // ─── fetchDocuments() ─────────────────────────────────────────────────────
+  // ─── readBoletoData() ─────────────────────────────────────────────────────
 
-  describe('fetchDocuments()', () => {
+  describe('readBoletoData()', () => {
     it('registers a dialog listener before clicking the barcode button', async () => {
       const onceSpy = vi.fn();
 
@@ -273,12 +273,12 @@ describe('AluguelProvider', () => {
       };
 
       // We don't await because the dialog never fires — just check ordering
-      void provider.fetchDocuments(mockPage as unknown as Page).catch(() => undefined);
+      void provider.readBoletoData(mockPage as unknown as Page).catch(() => undefined);
 
       expect(onceSpy).toHaveBeenCalledWith('dialog', expect.any(Function));
     });
 
-    it('returns a single document with id "boleto"', async () => {
+    it('returns boletoCode, amountCents, and dueDate', async () => {
       let dialogHandler: ((d: unknown) => void) | null = null;
 
       const mockDialog = {
@@ -303,13 +303,13 @@ describe('AluguelProvider', () => {
         }),
       };
 
-      const fetchPromise = provider.fetchDocuments(mockPage as unknown as Page);
+      const fetchPromise = provider.readBoletoData(mockPage as unknown as Page);
       if (dialogHandler) await (dialogHandler as (d: unknown) => Promise<void>)(mockDialog);
-      const docs = await fetchPromise;
+      const data = await fetchPromise;
 
-      expect(docs).toHaveLength(1);
-      expect(docs[0].id).toBe('boleto');
-      expect(docs[0].name).toBe('boleto-aluguel');
+      expect(data.boletoCode).toBe('34191095030050798383164');
+      expect(data.dueDate).toBe('10-04-2026');
+      expect(data.amountCents).toBe(249669);
     });
 
     it('extracts the barcode from the dialog message', async () => {
@@ -336,10 +336,11 @@ describe('AluguelProvider', () => {
         }),
       };
 
-      const fetchPromise = provider.fetchDocuments(mockPage as unknown as Page);
+      const fetchPromise = provider.readBoletoData(mockPage as unknown as Page);
       if (dialogHandler) await (dialogHandler as (d: unknown) => Promise<void>)(mockDialog);
+      const data = await fetchPromise;
 
-      await expect(fetchPromise).resolves.toHaveLength(1);
+      expect(data.boletoCode).toBe(expectedBarcode);
     });
   });
 });

@@ -9,7 +9,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CndProvider } from '../../../src/providers/cnd/cnd.provider.js';
 import type { BrowserService } from '../../../src/providers/base-scraper.js';
 import type { Page } from 'playwright';
-import type { DocumentMetadata } from '../../../src/providers/interfaces.js';
 import { pino } from 'pino';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -57,9 +56,9 @@ describe('CndProvider', () => {
     expect(cred.sensitive).toBe(false);
   });
 
-  // ─── login() ───────────────────────────────────────────────────────────────
+  // ─── navigateAndFill() ─────────────────────────────────────────────────────
 
-  describe('login()', () => {
+  describe('navigateAndFill()', () => {
     it('navigates to the Receita Federal CND URL', async () => {
       const input = makeLocatorStub();
       const button = makeLocatorStub();
@@ -70,11 +69,11 @@ describe('CndProvider', () => {
         ),
       };
 
-      await provider.login(mockPage as unknown as Page, { CNPJ: '12345678000195' });
+      await provider.navigateAndFill(mockPage as unknown as Page, { CNPJ: '12345678000195' });
 
       expect(mockPage.goto).toHaveBeenCalledWith(
         'https://servicos.receitafederal.gov.br/servico/certidoes/#/home/cnpj',
-        { waitUntil: 'networkidle' },
+        { waitUntil: 'load' },
       );
     });
 
@@ -88,7 +87,7 @@ describe('CndProvider', () => {
         ),
       };
 
-      await provider.login(mockPage as unknown as Page, { CNPJ: '12345678000195' });
+      await provider.navigateAndFill(mockPage as unknown as Page, { CNPJ: '12345678000195' });
 
       expect(input.fill).toHaveBeenCalledWith('12.345.678/0001-95');
     });
@@ -103,7 +102,7 @@ describe('CndProvider', () => {
         ),
       };
 
-      await provider.login(mockPage as unknown as Page, { CNPJ: '12.345.678/0001-95' });
+      await provider.navigateAndFill(mockPage as unknown as Page, { CNPJ: '12.345.678/0001-95' });
 
       expect(input.fill).toHaveBeenCalledWith('12.345.678/0001-95');
     });
@@ -118,63 +117,38 @@ describe('CndProvider', () => {
         ),
       };
 
-      await provider.login(mockPage as unknown as Page, { CNPJ: '12345678000195' });
+      await provider.navigateAndFill(mockPage as unknown as Page, { CNPJ: '12345678000195' });
 
       expect(button.click).toHaveBeenCalled();
     });
   });
 
-  // ─── fetchDocuments() ──────────────────────────────────────────────────────
+  // ─── waitForResult() ───────────────────────────────────────────────────────
 
-  describe('fetchDocuments()', () => {
-    it('clicks submit and waits for download button, returns CND metadata', async () => {
-      const downloadBtn = makeLocatorStub({ count: vi.fn().mockResolvedValue(0) });
-      const submitBtn = makeLocatorStub();
+  describe('waitForResult()', () => {
+    it('waits for the Segunda via button', async () => {
       const mockPage = {
-        locator: vi.fn().mockImplementation((sel: string) =>
-          sel.includes('Segunda via') ? downloadBtn : submitBtn,
-        ),
+        locator: vi.fn().mockReturnValue(makeLocatorStub()),
         waitForSelector: vi.fn().mockResolvedValue(undefined),
       };
 
-      const docs = await provider.fetchDocuments(mockPage as unknown as Page);
+      await provider.waitForResult(mockPage as unknown as Page);
 
-      expect(docs).toHaveLength(1);
-      expect(docs[0].name).toBe('certidao-negativa-debitos');
-      expect(docs[0].id).toBe('cnd-certidao');
       expect(mockPage.waitForSelector).toHaveBeenCalledWith(
         'button[title="Segunda via"]',
         expect.any(Object),
       );
     });
-
-    it('skips submit click when download button is already visible (retry safety)', async () => {
-      const downloadBtn = makeLocatorStub({ count: vi.fn().mockResolvedValue(1) });
-      const submitBtn = makeLocatorStub();
-      const mockPage = {
-        locator: vi.fn().mockImplementation((sel: string) =>
-          sel.includes('Segunda via') ? downloadBtn : submitBtn,
-        ),
-        waitForSelector: vi.fn().mockResolvedValue(undefined),
-      };
-
-      await provider.fetchDocuments(mockPage as unknown as Page);
-
-      expect(submitBtn.click).not.toHaveBeenCalled();
-      expect(mockPage.waitForSelector).not.toHaveBeenCalled();
-    });
   });
 
-  // ─── download() ────────────────────────────────────────────────────────────
+  // ─── downloadCertidao() ────────────────────────────────────────────────────
 
-  describe('download()', () => {
-    const doc: DocumentMetadata = { id: 'cnd-certidao', name: 'certidao-negativa-debitos' };
-    const docsDir = path.join(process.cwd(), 'documents', 'certidao-negativa-debitos');
+  describe('downloadCertidao()', () => {
+    const finalPath = path.join(process.cwd(), 'documents', 'certidao-negativa-debitos', 'test.pdf');
+    const docsDir = path.dirname(finalPath);
 
     afterEach(async () => {
-      // Clean up the documents directory created by the test run
       await fs.rm(docsDir, { recursive: true, force: true });
-      // Remove any leftover tmp files from the project root
       const entries = await fs.readdir(process.cwd()).catch(() => [] as string[]);
       await Promise.all(
         entries
@@ -183,8 +157,7 @@ describe('CndProvider', () => {
       );
     });
 
-    it('saves the downloaded PDF and returns a valid FileResult', async () => {
-      // Write minimal PDF magic bytes so MIME validation passes
+    it('saves the downloaded PDF and returns mimeType and sizeBytes', async () => {
       const fakeContent = Buffer.from('%PDF-1.4\n\nfake content\n%%EOF\n');
       const mockDownloadEvent = {
         saveAs: vi.fn().mockImplementation(async (savePath: string) => {
@@ -198,16 +171,11 @@ describe('CndProvider', () => {
         waitForEvent: vi.fn().mockResolvedValue(mockDownloadEvent),
       };
 
-      const result = await provider.download(mockPage as unknown as Page, doc);
+      const result = await provider.downloadCertidao(mockPage as unknown as Page, finalPath);
 
-      expect(result.type).toBe('file');
-      if (result.type === 'file') {
-        expect(result.filePath).toContain('certidao-negativa-debitos');
-        expect(result.mimeType).toBe('application/pdf');
-        expect(result.sizeBytes).toBeGreaterThan(0);
-        // File must exist on disk
-        await expect(fs.stat(result.filePath)).resolves.toBeDefined();
-      }
+      expect(result.mimeType).toBe('application/pdf');
+      expect(result.sizeBytes).toBeGreaterThan(0);
+      await expect(fs.stat(finalPath)).resolves.toBeDefined();
     });
 
     it('registers the download listener before clicking (correct Playwright pattern)', async () => {
@@ -233,10 +201,8 @@ describe('CndProvider', () => {
         }),
       };
 
-      await provider.download(mockPage as unknown as Page, doc);
+      await provider.downloadCertidao(mockPage as unknown as Page, finalPath);
 
-      // Both are started at the same time via Promise.all; order depends on JS microtask
-      // queue (Promise.all starts all in registration order), so waitForEvent must be first
       expect(callOrder[0]).toBe('waitForEvent');
     });
   });

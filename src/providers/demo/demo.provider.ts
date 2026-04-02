@@ -8,7 +8,6 @@
 
 import path from 'node:path';
 import fs from 'node:fs/promises';
-import type { Page } from 'playwright';
 import type { Logger } from 'pino';
 import { BaseScraper } from '../base-scraper.js';
 import type { BrowserService } from '../base-scraper.js';
@@ -45,23 +44,6 @@ export class DemoProvider extends BaseScraper {
         cause: err,
       };
     }
-  }
-
-  // ─── Abstract stubs (never called — run() is overridden) ────────────────
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  login(_page: Page, _credentials: Record<string, string>): Promise<void> {
-    return Promise.resolve();
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  fetchDocuments(_page: Page): Promise<DocumentMetadata[]> {
-    return Promise.resolve([]);
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  download(_page: Page, _doc: DocumentMetadata): Promise<ScraperResult> {
-    return Promise.resolve({ type: 'error' as const, message: 'not used' });
   }
 
   // ─── Demo steps ──────────────────────────────────────────────────────────

@@ -74,10 +74,14 @@ export class ProgressRenderer {
 
   /**
    * Move cursor below all sections and print a separator.
+   * Uses scrollDown to guarantee we're below any content written during the run.
    */
   dispose(): void {
-    term.moveTo(1, this.startRow + this.sections.size);
-    term.gray('─'.repeat(60) + '\n');
+    const lastRow = this.startRow + this.sections.size;
+    term.moveTo(1, lastRow);
+    term.eraseLine();
+    term.gray('─'.repeat(60));
+    term('\n');
     this.sections.clear();
   }
 }

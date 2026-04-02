@@ -31,14 +31,13 @@ const term = terminal.terminal;
 
 // ─── Logger ────────────────────────────────────────────────────────────────
 
-export const logger = pino({
-  level: process.env['LOG_LEVEL'] ?? 'info',
-  name: 'scrapariga',
-  transport:
-    process.env['NODE_ENV'] !== 'production'
-      ? { target: 'pino-pretty', options: { colorize: true, translateTime: 'SYS:standard' } }
-      : undefined,
-});
+export const logger = pino(
+  {
+    level: process.env['LOG_LEVEL'] ?? 'info',
+    name: 'scrapariga',
+  },
+  pino.destination({ dest: 'logs/scrapariga.log', sync: false, mkdir: true }),
+);
 
 // ─── Services ──────────────────────────────────────────────────────────────
 
@@ -177,7 +176,6 @@ async function main(): Promise<void> {
   // Playwright keeps process handles alive that block the default SIGINT behaviour.
   process.on('SIGINT', () => {
     term.grabInput(false);
-    term('\nAté logo!\n');
     process.exit(0);
   });
 
@@ -186,7 +184,6 @@ async function main(): Promise<void> {
   term.on('key', (name: string) => {
     if (name === 'CTRL_C') {
       term.grabInput(false);
-      term('\nAté logo!\n');
       process.exit(0);
     }
   });
@@ -198,7 +195,6 @@ async function main(): Promise<void> {
     const choice = await showMainMenu();
 
     if (choice.action === 'exit') {
-      term('\nAté logo!\n');
       term.processExit(0);
     }
 

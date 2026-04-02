@@ -3,10 +3,10 @@
  *
  * URL: https://servicos.receitafederal.gov.br/servico/certidoes/#/home/cnpj
  *
- * Flow:
- *   login()          → navigate, fill CNPJ, click "Consultar Certidão"
- *   fetchDocuments() → wait for results page with download button
- *   download()       → click "Segunda via", capture PDF, validate, save
+ * Flow (inside run()):
+ *   navigateAndFill()  → navigate, fill CNPJ, click "Consultar Certidão"
+ *   waitForResult()    → wait for the download button to appear
+ *   downloadCertidao() → click "Segunda via", intercept download, save PDF
  *
  * Selectors (all confirmed via browser DevTools):
  *   input[name="niContribuinte"]                   → CNPJ input
@@ -15,14 +15,12 @@
  */
 
 import path from 'node:path';
-import fs from 'node:fs/promises';
 import type { Page } from 'playwright';
 import type { Logger } from 'pino';
 import { BaseScraper, type BrowserService } from '../base-scraper.js';
-import type { DocumentMetadata, EnvCredential, ScraperResult } from '../interfaces.js';
+import type { EnvCredential, ProgressCallback, ScraperResult } from '../interfaces.js';
 
 const CND_URL = 'https://servicos.receitafederal.gov.br/servico/certidoes/#/home/cnpj';
-const ALLOWED_MIMES = ['application/pdf'];
 
 /**
  * Formats a raw CNPJ string to XX.XXX.XXX/XXXX-XX.
@@ -54,14 +52,77 @@ export class CndProvider extends BaseScraper {
     super(browserService, logger);
   }
 
-  // ─── Step 1: Navigate, fill CNPJ, click first "Consultar Certidão" ───────
+  // ─── run() ────────────────────────────────────────────────────────────────
 
-  async login(page: Page, credentials: Record<string, string>): Promise<void> {
-    this.emitStep({
-      stepId: 'login',
-      label: 'Abrindo página da Receita Federal...',
-      status: 'pending',
-    });
+  async run(
+    credentials: Record<string, string>,
+    onProgress: ProgressCallback,
+  ): Promise<ScraperResult> {
+    this._progressCallback = onProgress;
+
+    const sessionState = await this.loadSession();
+    const page = await this.browserService.newPage(sessionState);
+
+    try {
+      await this.retry(
+        () => this.navigateAndFill(page, credentials),
+        {
+          maxAttempts: 3,
+          baseDelayMs: 1000,
+          onAttempt: (attempt, error) => {
+            this.emitStep({ stepId: 'login', label: `Preenchendo formulário (tentativa ${attempt}/3)...`, status: 'error' });
+            this.logger.warn({ attempt, err: error.message }, 'navigateAndFill retry');
+          },
+        },
+      );
+
+      await this.waitForResult(page);
+
+      await this.debugShot(page, 'cnd-result');
+
+      const finalPath = this.buildFilePath('certidao-negativa-debitos', 'pdf');
+      const { mimeType, sizeBytes } = await this.retry(
+        () => this.downloadCertidao(page, finalPath),
+        {
+          maxAttempts: 3,
+          baseDelayMs: 1000,
+          onAttempt: (attempt, error) => {
+            this.emitStep({ stepId: 'download', label: `Baixando certidão (tentativa ${attempt}/3)...`, status: 'error' });
+            this.logger.warn({ attempt, err: error.message }, 'downloadCertidao retry');
+          },
+        },
+      );
+
+      await this.persistSession(page.context());
+
+      this.emitStep({
+        stepId: 'download',
+        label: `Certidão salva: ${path.basename(finalPath)}`,
+        status: 'success',
+      });
+
+      return {
+        type: 'file',
+        filePath: finalPath,
+        mimeType,
+        sizeBytes,
+      };
+    } catch (err) {
+      this.logger.error({ err }, 'CndProvider run() failed');
+      return {
+        type: 'error',
+        message: err instanceof Error ? err.message : String(err),
+        cause: err,
+      };
+    } finally {
+      await page.close();
+    }
+  }
+
+  // ─── Step 1: Navigate, fill CNPJ, click "Consultar Certidão" ─────────────
+
+  async navigateAndFill(page: Page, credentials: Record<string, string>): Promise<void> {
+    this.emitStep({ stepId: 'login', label: 'Abrindo página da Receita Federal...', status: 'pending' });
 
     await page.goto(CND_URL, { waitUntil: 'load' });
 
@@ -72,7 +133,6 @@ export class CndProvider extends BaseScraper {
     await input.waitFor({ state: 'visible', timeout: 15_000 });
     await input.fill(cnpj);
 
-    // type="button" + .br-button.secondary: DS Gov semantic class for the secondary action
     const consultarBtn = page
       .locator('button.br-button.secondary')
       .filter({ hasText: 'Consultar' });
@@ -82,44 +142,23 @@ export class CndProvider extends BaseScraper {
     this.emitStep({ stepId: 'login', label: 'Formulário enviado', status: 'success' });
   }
 
-  // ─── Step 2: Click primary "Consultar Certidão", wait for results table ───
+  // ─── Step 2: Wait for the result page ────────────────────────────────────
 
-  async fetchDocuments(page: Page): Promise<DocumentMetadata[]> {
-    this.emitStep({
-      stepId: 'fetch',
-      label: 'Aguardando resultado da consulta...',
-      status: 'pending',
-    });
+  async waitForResult(page: Page): Promise<void> {
+    this.emitStep({ stepId: 'fetch', label: 'Aguardando resultado da consulta...', status: 'pending' });
 
-    // After clicking "Consultar", the page loads results directly.
-    // Wait for the download button to confirm the result is ready.
-      setTimeout( async () => {
-    }, 3000);
     await page.waitForSelector('button[title="Segunda via"]', { timeout: 30_000 });
 
-    this.emitStep({
-      stepId: 'fetch',
-      label: '1 certidão disponível para download',
-      status: 'success',
-    });
-
-    return [
-      {
-        id: 'cnd-certidao',
-        name: 'certidao-negativa-debitos',
-        mimeHint: 'application/pdf',
-      },
-    ];
+    this.emitStep({ stepId: 'fetch', label: '1 certidão disponível para download', status: 'success' });
   }
 
-  // ─── Step 3: Click "Segunda via", capture download, validate, save ────────
+  // ─── Step 3: Click "Segunda via", capture Playwright download, save PDF ──
 
-  async download(page: Page, doc: DocumentMetadata): Promise<ScraperResult> {
-    this.emitStep({
-      stepId: 'download',
-      label: 'Iniciando download da certidão...',
-      status: 'pending',
-    });
+  async downloadCertidao(
+    page: Page,
+    finalPath: string,
+  ): Promise<{ mimeType: string; sizeBytes: number }> {
+    this.emitStep({ stepId: 'download', label: 'Iniciando download da certidão...', status: 'pending' });
 
     const downloadButton = page.locator('button[title="Segunda via"]');
     await downloadButton.waitFor({ state: 'visible', timeout: 10_000 });
@@ -132,36 +171,37 @@ export class CndProvider extends BaseScraper {
 
     this.emitStep({ stepId: 'download', label: 'Baixando arquivo...', status: 'pending' });
 
-    // Save to tmp → validate MIME → move to canonical documents path
+    // Save via Playwright's built-in download API (no direct URL available)
     const tmpPath = path.join(process.cwd(), `cnd-${Date.now()}.tmp`);
     await downloadEvent.saveAs(tmpPath);
 
-    await this.validateDownload(tmpPath, ALLOWED_MIMES);
+    // Re-use base class validation + move logic via downloadFile workaround:
+    // since we already have the file at tmpPath, validate and move manually.
+    const fs = await import('node:fs/promises');
+    const { fileTypeFromBuffer } = await import('file-type');
+    const allowedMimes = ['application/pdf'];
 
-    const finalPath = this.buildFilePath(doc.name, 'pdf');
+    const buf = await fs.readFile(tmpPath);
+    const detected = await fileTypeFromBuffer(buf);
+
+    if (!detected || !allowedMimes.includes(detected.mime)) {
+      await fs.unlink(tmpPath).catch(() => undefined);
+      throw new Error(
+        `Invalid MIME type: expected one of [${allowedMimes.join(', ')}], got ${detected?.mime ?? 'unknown'}`,
+      );
+    }
+
     await fs.mkdir(path.dirname(finalPath), { recursive: true });
 
     try {
       await fs.rename(tmpPath, finalPath);
     } catch {
-      // Cross-device move fallback (e.g. tmp on different partition)
       await fs.copyFile(tmpPath, finalPath);
       await fs.unlink(tmpPath).catch(() => undefined);
     }
 
     const stat = await fs.stat(finalPath);
-
-    this.emitStep({
-      stepId: 'download',
-      label: `Certidão salva: ${path.basename(finalPath)}`,
-      status: 'success',
-    });
-
-    return {
-      type: 'file',
-      filePath: finalPath,
-      mimeType: 'application/pdf',
-      sizeBytes: stat.size,
-    };
+    return { mimeType: detected.mime, sizeBytes: stat.size };
   }
 }
+

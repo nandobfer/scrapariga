@@ -29,3 +29,6 @@ Thumbs.db
 
 # Temp downloads
 *.tmp
+
+# Debug screenshots
+screenshots/
