@@ -104,7 +104,23 @@ export interface ErrorResult {
   cause?: unknown;
 }
 
-export type ScraperResult = FileResult | PaymentResult | ErrorResult;
+export interface BoletoResult {
+  type: 'boleto';
+  /** Linha digitável for payment via internet banking */
+  boletoCode: string;
+  /** Total amount due in cents (integer to avoid float precision issues) */
+  amountCents: number;
+  /** Due date in DD-MM-YYYY format */
+  dueDate: string;
+  /** Absolute path to the saved PDF */
+  filePath: string;
+  /** Validated MIME type */
+  mimeType: string;
+  /** File size in bytes */
+  sizeBytes: number;
+}
+
+export type ScraperResult = FileResult | PaymentResult | BoletoResult | ErrorResult;
 
 // ---------------------------------------------------------------------------
 // Retry
