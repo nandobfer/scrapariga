@@ -42,7 +42,7 @@ description: "Task list for 001-cli-interactive-menu"
 - [ ] T006 Implement `src/providers/interfaces.ts` — copy and finalize all types from `specs/001-cli-interactive-menu/contracts/interfaces.ts`: `EnvCredential`, `MenuItem`, `MenuItemType`, `ProgressEvent`, `ProgressStatus`, `ProgressCallback`, `DocumentMetadata`, `FileResult`, `PaymentResult`, `ErrorResult`, `ScraperResult`, `RetryOptions`
 - [ ] T007 [P] Implement `src/core/browser.service.ts` — `BrowserService` interface (newPage, close) + `PlaywrightBrowserService` class: launches Chromium via Playwright, accepts optional `StorageState` to restore session, exposes `newPage()` and `close()`
 - [ ] T008 [P] Implement `src/core/env.service.ts` — `EnvService` class: `get(key)` reads from `process.env`; `set(key, value)` writes atomically to `.env` (read → regex-replace or append → write to `.env.tmp` → rename); `promptMissing(credentials)` uses `terminal-kit` to interactively collect each missing value (masked input for `sensitive: true`); pino logger with `redact` — never logs raw credential values
-- [ ] T009 [P] Implement `src/core/provider-factory.ts` — `ProviderFactory` class: registry map `Map<string, () => BaseScraper>`; `register(id, factory)` and `create(id)` methods; throws descriptive error for unknown provider IDs
+- [ ] T009 Implement `src/core/provider-factory.ts` — `ProviderFactory` class: registry map `Map<string, () => BaseScraper>`; `register(id, factory)` and `create(id)` methods; throws descriptive error for unknown provider IDs *(depends on T010 — BaseScraper type required)*
 - [ ] T010 Implement `src/providers/base-scraper.ts` — copy and finalize abstract class from `specs/001-cli-interactive-menu/contracts/BaseScraper.ts`: constructor(BrowserService, Logger), `run()` Template Method, `retry<T>()`, `emitProgress()`, `buildFilePath()`, `ensureDir()`, `validateDownload()`, `persistSession()`, `loadSession()`; abstract: `name`, `requiredCredentials`, `login()`, `fetchDocuments()`, `download()`
 
 **Checkpoint**: `npm run typecheck` passes with zero errors on the foundational layer. No runtime needed.
@@ -74,8 +74,8 @@ description: "Task list for 001-cli-interactive-menu"
 ### Implementation for User Story 4
 
 - [ ] T014 [US4] Implement `src/cli/renderer/progress.renderer.ts` — `ProgressRenderer` class: `init(providerNames: string[])` reserva N linhas fixas no terminal (uma por provider) usando `terminal.saveCursor()` + espaços; `update(providerName, event: ProgressEvent)` usa `terminal.moveTo(row, col)` para sobrescrever a linha correspondente com o emoji de status + rótulo + spinner ou barra terminal-kit; `done(providerName)` marca a seção como concluída; `dispose()` restaura cursor e imprime separador
-- [ ] T015 [P] [US4] Implement `src/cli/renderer/result.renderer.ts` — `ResultRenderer`: `render(result: ScraperResult)` — `FileResult`: imprime ✅ + path em verde; `PaymentResult`: imprime valor formatado (em reais, não centavos), código Pix em caixa destacada, QR Code via `qrcode-terminal`; `ErrorResult`: imprime ❌ em vermelho com mensagem; seguido de "Pressione qualquer tecla..." usando `terminal.singleColumnMenu`
-- [ ] T016 [US4] Implement retry prompt in `src/cli/renderer/result.renderer.ts` (or separate `src/cli/renderer/retry.prompt.ts`) — `promptRetry()`: after max retries exhausted, `terminal.yesOrNo({ yes: ['y', 's'], no: ['n'] })` → returns boolean; displayed with ❌ context and attempt count
+- [ ] T015 [P] [US4] Implement `src/cli/renderer/result.renderer.ts` — `ResultRenderer`: `render(result: ScraperResult)` — `FileResult`: imprime ✅ + path em verde; `PaymentResult`: imprime valor formatado (em reais, não centavos), código Pix em caixa destacada, QR Code via `qrcode-terminal`; `ErrorResult`: imprime ❌ em vermelho com mensagem; seguido de `terminal('\nPressione qualquer tecla para continuar...')` + `await terminal.waitForEvent('key')`
+- [ ] T016 [US4] Implement `src/cli/renderer/retry.prompt.ts` — `promptRetry()`: after max retries exhausted, `terminal.yesOrNo({ yes: ['y', 's'], no: ['n'] })` → returns boolean; displayed with ❌ context and attempt count
 
 **Checkpoint**: `ProgressRenderer` e `ResultRenderer` renderizam corretamente com dados hardcoded em um arquivo de teste manual (`tsx tests/manual/renderer.test.ts`).
 
@@ -98,7 +98,7 @@ description: "Task list for 001-cli-interactive-menu"
 - [ ] T020 [US5] Implement `src/providers/demo/demo.provider.ts` — `DemoProvider extends BaseScraper`: `name = 'demo'`, `requiredCredentials = []`; `login()`: delay 1500ms + emite ProgressEvent login/pending → login/success; `fetchDocuments()`: delay 1000ms + emite fetch/pending → fetch/success, returns 1 `DocumentMetadata`; `download()`: delay 2000ms + emite download/pending → download/success (se `DEMO_FAIL_ON !== 'download'`) ou lança Error; retorna `FileResult` com `buildFilePath('demo', 'pdf')`
 - [ ] T021 [US5] Register `DemoProvider` in `src/core/provider-factory.ts` and add "Demo" entry to `src/cli/menus/main.menu.ts` (visible only when `NODE_ENV !== 'production'`); wire full execution flow in `src/index.ts` (select provider → `EnvService.promptMissing()` → `ProgressRenderer.init()` → `provider.run()` via `ProgressCallback` → `ResultRenderer.render()` → `promptRetry()` if needed → back to menu)
 
-**Checkpoint**: `npm test` — all tests pass. `tsx src/index.ts` → Demo → 4 animated steps visible → FileResult displayed → any key → back to main menu.
+**Checkpoint**: `npm test` — all tests pass. `tsx src/index.ts` → Demo → 3 animated steps visible (login, fetchDocuments, download) → FileResult displayed → any key → back to main menu.
 
 ---
 
@@ -111,7 +111,7 @@ description: "Task list for 001-cli-interactive-menu"
 ### Implementation for User Story 2
 
 - [ ] T022 [US2] Implement `src/cli/menus/contas.menu.ts` — `showContasMenu()`: `terminal.singleColumnMenu()` com itens `['1  Conta de Luz', '2  Aluguel', '3  Condomínio', '4  Todos', '5  Voltar']`; number-key shortcuts (1–5); returns `{ action: 'provider' | 'all' | 'back', providerIds: string[] }`
-- [ ] T023 [US2] Wire `contas.menu.ts` into `src/index.ts` main loop: "Contas" → `showContasMenu()` → if back return to main; if provider → `EnvService.promptMissing(provider.requiredCredentials)` → execute with `ProgressRenderer` + `ResultRenderer`; if "Todos" → `ProgressRenderer.init([all provider names])` → sequential execution with shared renderer → aggregate results
+- [ ] T023 [US2] Wire `contas.menu.ts` into `src/index.ts` main loop: "Contas" → `showContasMenu()` → if back return to main; if provider → `EnvService.promptMissing(provider.requiredCredentials)` → execute with `ProgressRenderer` + `ResultRenderer`; if "Todos" → `ProgressRenderer.init([all provider names])` → sequential execution: each provider run wrapped in try/catch — on error mark its section ❌, collect to `errors[]`, continue loop — after all runs: if `errors.length > 0`, render error summary; remaining providers always execute regardless of previous failures
 
 **Checkpoint**: Fluxo completo Contas → Luz/Aluguel/Condomínio sem credenciais no `.env` → prompt aparece → `.env` atualizado → DemoProvider executa como stub → resultado exibido → back to menu.
 
@@ -126,7 +126,7 @@ description: "Task list for 001-cli-interactive-menu"
 ### Implementation for User Story 3
 
 - [ ] T024 [P] [US3] Implement `src/cli/menus/nota-fiscal.menu.ts` — `showNotaFiscalMenu()`: itens `['1  CND', '2  Comprovante de Pagamento', '3  Todos', '4  Voltar']`; same pattern as `contas.menu.ts`
-- [ ] T025 [US3] Wire `nota-fiscal.menu.ts` into `src/index.ts` main loop — same execution pattern as US2: credential check → ProgressRenderer → run → ResultRenderer → retry prompt → back to menu
+- [ ] T025 [US3] Wire `nota-fiscal.menu.ts` into `src/index.ts` main loop — same execution pattern as US2: credential check → ProgressRenderer → run → ResultRenderer → retry prompt → back to menu; for "Todos": each provider wrapped in try/catch — on error mark section ❌, collect to `errors[]`, continue — render error summary after all runs complete
 
 **Checkpoint**: Fluxo completo Nota Fiscal → CND/Comprovante → coleta de credenciais → execução → resultado → back to menu.
 

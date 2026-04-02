@@ -37,9 +37,9 @@ Ao selecionar "Contas", o usuário vê um segundo menu com as opções **Conta d
 
 1. **Given** o submenu de Contas é exibido, **When** o usuário navega por setas ou digita o número (1–5), **Then** a opção correspondente é selecionada.
 2. **Given** o submenu de Contas é exibido, **When** o usuário seleciona "Voltar", **Then** a aplicação retorna ao menu principal imediatamente.
-2. **Given** a opção "Conta de Luz" é selecionada e as credenciais necessárias para aquele provedor não estão no `.env`, **When** a aplicação inicia, **Then** ela solicita interativamente cada valor faltante com uma mensagem descritiva.
-3. **Given** o usuário fornece as credenciais, **When** confirmadas, **Then** os valores são gravados no `.env` e a aplicação prossegue sem solicitar novamente.
-4. **Given** a opção "Todos" é selecionada, **When** executada, **Then** a tela é dividida em seções fixas — uma por script — cada uma exibindo seu próprio bloco de progresso (rótulo, spinner/barra de etapa atual, status ✅/❌); os scripts rodam sequencialmente mas o layout de todas as seções permanece visível simultaneamente.
+3. **Given** a opção "Conta de Luz" é selecionada e as credenciais necessárias para aquele provedor não estão no `.env`, **When** a aplicação inicia, **Then** ela solicita interativamente cada valor faltante com uma mensagem descritiva.
+4. **Given** o usuário fornece as credenciais, **When** confirmadas, **Then** os valores são gravados no `.env` e a aplicação prossegue sem solicitar novamente.
+5. **Given** a opção "Todos" é selecionada, **When** executada, **Then** a tela é dividida em seções fixas — uma por script — cada uma exibindo seu próprio bloco de progresso (rótulo, spinner/barra de etapa atual, status ✅/❌); os scripts rodam sequencialmente mas o layout de todas as seções permanece visível simultaneamente.
 
 ---
 
@@ -100,7 +100,7 @@ Um provedor de demonstração funcional (`DemoProvider`) acompanha o repositóri
 - O que acontece quando já existe um arquivo com o mesmo nome (`YYYY-MM-DD.<extensão>`) no diretório destino? → O arquivo existente é sobrescrito; a operação é registrada em log no nível `warn`.
 - O que acontece quando o `.env` existe mas contém um valor vazio para uma credencial obrigatória? → A aplicação trata como ausente e solicita novamente.
 - O que acontece quando o usuário cancela o prompt de credencial (Ctrl+C)? → A aplicação encerra graciosamente com mensagem de cancelamento, sem corromper o `.env`.
-- O que acontece quando o terminal não suporta cores ou Unicode? → A aplicação detecta o suporte e exibe fallback sem cores e sem emojis, mantendo a funcionalidade.
+- O que acontece quando o terminal não suporta cores ou Unicode? → **Fora do escopo desta feature.** A aplicação assume terminal Unix-like com suporte a ANSI colors e Unicode/emoji. Detecção de capacidade e modo `PLAIN_OUTPUT` são melhorias futuras.
 - O que acontece quando um script dentro de "Todos" falha? → Os demais continuam; o erro é reportado ao final com ❌ sem interromper os outros.
 - O que acontece após um script terminar (sucesso ou erro)? → A aplicação retorna automaticamente ao menu principal, permitindo nova seleção sem precisar relançar o comando.
 
@@ -122,7 +122,7 @@ Um provedor de demonstração funcional (`DemoProvider`) acompanha o repositóri
 - **FR-010**: O contrato dos scripts DEVE incluir: método de execução que recebe credenciais e um handler de eventos de progresso (callback/listener), e estrutura de resultado final (arquivo baixado, dados de pagamento, ou erro). O script emite `ProgressEvent`s durante a execução; a CLI registra o handler e renderiza cada evento em tempo real.
 - **FR-011**: Durante a execução de cada script, a aplicação DEVE exibir uma barra de loading / spinner animado por etapa, com rótulo descritivo.
 - **FR-012**: Ao concluir cada etapa, a aplicação DEVE atualizar o indicador visual para ✅ (sucesso), ⚠️ (aviso) ou ❌ (erro) com a cor correspondente.
-- **FR-013**: Os logs exibidos DEVEM usar cores diferentes por nível: verde para sucesso, amarelo para aviso, vermelho para erro, cinza/branco para informação neutra.
+- **FR-013**: Os eventos de progresso exibidos via `ProgressRenderer` e resultados via `ResultRenderer` DEVEM usar cores por tipo: `terminal.green` para sucesso, `terminal.yellow` para aviso, `terminal.red` para erro, `terminal.gray` para informação neutra. Os logs de sistema emitidos pelo `pino` DEVEM usar `pino-pretty` com colorização automática por nível (`debug`, `info`, `warn`, `error`).
 - **FR-014**: A seleção "Todos" em qualquer submenu DEVE executar todos os scripts da categoria sequencialmente, exibindo uma seção fixa por script na tela — cada seção com seu próprio bloco de progresso (rótulo, spinner/barra de etapa, status final) visível simultaneamente durante toda a execução.
 - **FR-015**: Em caso de falha de um script dentro de "Todos", os demais DEVEM continuar executando; o erro é reportado na seção fixa do script com o ciclo de retry descrito em FR-016.
 - **FR-016**: Em caso de falha de qualquer etapa de um script, a aplicação DEVE tentar novamente automaticamente com backoff exponencial, até 3 tentativas, exibindo cada tentativa e seu status em tempo real na seção de progresso do script. Após esgotar as 3 tentativas, DEVE exibir o prompt "Tentar novamente? (s/n)"; ao confirmar, o ciclo reinicia; ao negar, a execução do script é encerrada e a aplicação retorna ao menu principal.
@@ -162,7 +162,6 @@ Um provedor de demonstração funcional (`DemoProvider`) acompanha o repositóri
 - Q: A aplicação suporta múltiplos perfis de usuário? → A: Não — perfil único; um `.env` com as credenciais de uma pessoa
 - Q: O que acontece quando um script falha? → A: Retry automático com backoff exponencial (até 3 tentativas), progresso e erros sempre visíveis; após esgotar tentativas, exibe prompt "Tentar novamente? (s/n)" antes de retornar ao menu
 - Q: Os submenus devem ter opção "Voltar"? → A: Sim — opção "Voltar" aparece em cada submenu após as opções de conteúdo
-- Q: Os submenus devem ter opção "Voltar"? → A: Sim — opção "Voltar" aparece em cada submenu após as opções de conteúdo
 
 ---
 
@@ -176,3 +175,4 @@ Um provedor de demonstração funcional (`DemoProvider`) acompanha o repositóri
 - Não há sistema de autenticação da própria CLI — a segurança das credenciais é por variável de ambiente, não por login na ferramenta.
 - O usuário executa a aplicação com `tsx src/index.ts` (ou um alias/script npm equivalente); não há binário compilado no escopo desta feature.
 - Após cada execução de script, a aplicação retorna automaticamente ao menu principal — a sessão da CLI persiste até o usuário sair explicitamente (ex: Ctrl+C ou opção "Sair" no menu).
+- Suporte a terminais sem cores ou Unicode está explicitamente fora do escopo desta feature. A aplicação assume terminal Unix-like com TTY interativo e suporte completo a ANSI colors e Unicode/emoji. Detecção de capacidade terminal e modo `PLAIN_OUTPUT` são melhorias futuras.
