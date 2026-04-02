@@ -64,10 +64,26 @@ export abstract class BaseScraper {
 
   // ─── Template Method ────────────────────────────────────────────────────────
 
+  /**
+   * Stored during run() so abstract method implementations can call emitStep()
+   * without needing to receive the callback as a parameter.
+   * Initialize to no-op — only active during an ongoing run().
+   */
+  protected _progressCallback: ProgressCallback = () => undefined;
+
+  /**
+   * Emit a progress event using the current run's callback.
+   * Call this from login(), fetchDocuments(), and download() implementations.
+   */
+  protected emitStep(event: ProgressEvent): void {
+    this.emitProgress(this._progressCallback, event);
+  }
+
   async run(
     credentials: Record<string, string>,
     onProgress: ProgressCallback,
   ): Promise<ScraperResult> {
+    this._progressCallback = onProgress;
     const sessionState = await this.loadSession();
     const page = await this.browserService.newPage(sessionState);
 

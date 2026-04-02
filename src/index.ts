@@ -7,7 +7,11 @@
  */
 
 import 'dotenv/config';
+import { spawnSync, spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { pino } from 'pino';
+import { chromium } from 'playwright';
 import { renderSplash } from './cli/renderer/splash.js';
 import { showMainMenu } from './cli/menus/main.menu.js';
 import { showContasMenu } from './cli/menus/contas.menu.js';
@@ -18,6 +22,7 @@ import { ProgressRenderer } from './cli/renderer/progress.renderer.js';
 import { ResultRenderer } from './cli/renderer/result.renderer.js';
 import { promptRetry } from './cli/renderer/retry.prompt.js';
 import { DemoProvider } from './providers/demo/demo.provider.js';
+import { CndProvider } from './providers/cnd/cnd.provider.js';
 import { PlaywrightBrowserService } from './core/browser.service.js';
 import terminal from 'terminal-kit';
 
@@ -50,13 +55,15 @@ if (process.env['NODE_ENV'] !== 'production') {
   });
 }
 
+factory.register('cnd', () => new CndProvider(new PlaywrightBrowserService(), logger));
+
 // ─── Execution helper ──────────────────────────────────────────────────────
 
 async function executeProvider(providerId: string): Promise<void> {
   const provider = factory.create(providerId);
   const credentials = await envService.promptMissing(provider.requiredCredentials);
 
-  progressRenderer.init([provider.name]);
+  await progressRenderer.init([provider.name]);
 
   let result = await provider.run(credentials, (event) => {
     progressRenderer.update(provider.name, event);
@@ -69,7 +76,7 @@ async function executeProvider(providerId: string): Promise<void> {
     const shouldRetry = await promptRetry(result.message);
     if (!shouldRetry) break;
 
-    progressRenderer.init([provider.name]);
+    await progressRenderer.init([provider.name]);
     result = await provider.run(credentials, (event) => {
       progressRenderer.update(provider.name, event);
     });
@@ -91,7 +98,7 @@ async function executeTodos(providerIds: string[]): Promise<void> {
     );
   }
 
-  progressRenderer.init(names);
+  await progressRenderer.init(names);
 
   const errors: Array<{ name: string; message: string }> = [];
 
@@ -126,9 +133,61 @@ async function executeTodos(providerIds: string[]): Promise<void> {
   }
 }
 
+// ─── Playwright health check ──────────────────────────────────────────────
+
+async function checkPlaywright(): Promise<void> {
+  const binaryPath = chromium.executablePath();
+  const binaryMissing = !fs.existsSync(binaryPath);
+
+  let libsMissing = false;
+  if (!binaryMissing) {
+    const ldd = spawnSync('ldd', [binaryPath], { encoding: 'utf-8' });
+    const output = (ldd.stdout ?? '') + (ldd.stderr ?? '');
+    libsMissing = output.includes('not found');
+  }
+
+  if (!binaryMissing && !libsMissing) return;
+
+  if (binaryMissing) {
+    term.yellow('\n⚠️  Playwright Chromium não encontrado. Executando setup...\n');
+  } else {
+    term.yellow('\n⚠️  Dependências do sistema para o Playwright estão faltando. Executando setup...\n');
+  }
+
+  const setupScript = path.resolve('scripts/setup-playwright.ts');
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn('npx', ['tsx', setupScript], { stdio: 'inherit', shell: false });
+    child.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`playwright:setup encerrou com código ${String(code)}`));
+    });
+  });
+}
+
 // ─── Main loop ─────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
+  await checkPlaywright();
+
+  // Clean exit on Ctrl+C — works during menus AND during Playwright scraping.
+  // process.on('SIGINT') is preferred over terminal-kit's key events because
+  // Playwright keeps process handles alive that block the default SIGINT behaviour.
+  process.on('SIGINT', () => {
+    term.grabInput(false);
+    term('\nAté logo!\n');
+    process.exit(0);
+  });
+
+  // When terminal-kit has input grabbed (raw mode), Ctrl+C becomes
+  // byte 0x03 in stdin — SIGINT is never dispatched. This catches it.
+  term.on('key', (name: string) => {
+    if (name === 'CTRL_C') {
+      term.grabInput(false);
+      term('\nAté logo!\n');
+      process.exit(0);
+    }
+  });
+
   renderSplash();
 
   // eslint-disable-next-line no-constant-condition

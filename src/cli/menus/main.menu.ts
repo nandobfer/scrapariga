@@ -46,8 +46,9 @@ export async function showMainMenu(): Promise<MainMenuResult> {
 
     term.on('key', keyHandler);
 
-    void term.singleColumnMenu(items, { cancelable: false }, (_err, res) => {
+    void term.singleColumnMenu(items, { cancelable: true }, (_err, res) => {
       term.removeListener('key', keyHandler);
+      if (res.canceled) { term('\n'); process.exit(0); }
       resolve(mapping[res.selectedIndex]);
     });
   });

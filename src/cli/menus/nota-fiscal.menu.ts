@@ -46,8 +46,9 @@ export async function showNotaFiscalMenu(): Promise<SubMenuResult> {
 
     term.on('key', keyHandler);
 
-    void term.singleColumnMenu(ITEMS, { cancelable: false }, (_err, res) => {
+    void term.singleColumnMenu(ITEMS, { cancelable: true }, (_err, res) => {
       term.removeListener('key', keyHandler);
+      if (res.canceled) { term('\n'); process.exit(0); }
       resolve(MAPPING[res.selectedIndex]);
     });
   });
