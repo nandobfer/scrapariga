@@ -23,10 +23,10 @@ const ITEMS = [
   '5  Voltar',
 ];
 
-const PROVIDER_IDS = ['conta-luz', 'aluguel', 'condominio'];
+const PROVIDER_IDS = ['copel', 'aluguel', 'condominio'];
 
 const MAPPING: SubMenuResult[] = [
-  { action: 'provider', providerId: 'conta-luz' },
+  { action: 'provider', providerId: 'copel' },
   { action: 'provider', providerId: 'aluguel' },
   { action: 'provider', providerId: 'condominio' },
   { action: 'all', providerIds: PROVIDER_IDS },

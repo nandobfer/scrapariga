@@ -25,6 +25,7 @@ import { DemoProvider } from './providers/demo/demo.provider.js';
 import { CndProvider } from './providers/cnd/cnd.provider.js';
 import { AluguelProvider } from './providers/aluguel/aluguel.provider.js';
 import { CondominioProvider } from './providers/condominio/condominio.provider.js';
+import { CopelProvider } from './providers/copel/copel.provider.js';
 import { PlaywrightBrowserService } from './core/browser.service.js';
 import terminal from 'terminal-kit';
 
@@ -61,6 +62,8 @@ factory.register('cnd', () => new CndProvider(new PlaywrightBrowserService(), lo
 factory.register('aluguel', () => new AluguelProvider(new PlaywrightBrowserService(), logger));
 
 factory.register('condominio', () => new CondominioProvider(new PlaywrightBrowserService(), logger));
+
+factory.register('copel', () => new CopelProvider(new PlaywrightBrowserService(), logger));
 
 // ─── Execution helper ──────────────────────────────────────────────────────
 

@@ -140,7 +140,23 @@ export interface CondoBoletoResult {
   sizeBytes: number;
 }
 
-export type ScraperResult = FileResult | PaymentResult | BoletoResult | CondoBoletoResult | ErrorResult;
+export interface CopelBillResult {
+  type: 'copel-bill';
+  /** PIX copia-e-cola code for payment */
+  pixCode: string;
+  /** Total amount due in cents (integer to avoid float precision issues) */
+  amountCents: number;
+  /** Due date in DD/MM/YYYY format */
+  dueDate: string;
+  /** Absolute path to the saved PDF */
+  filePath: string;
+  /** Validated MIME type */
+  mimeType: string;
+  /** File size in bytes */
+  sizeBytes: number;
+}
+
+export type ScraperResult = FileResult | PaymentResult | BoletoResult | CondoBoletoResult | CopelBillResult | ErrorResult;
 
 // ---------------------------------------------------------------------------
 // Retry
