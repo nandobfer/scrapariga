@@ -1,0 +1,41 @@
+{
+  "name": "scrapariga",
+  "version": "0.1.0",
+  "description": "CLI interativa de scraping de documentos e contas",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "tsc",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "test:contract": "vitest run tests/contract",
+    "test:watch": "vitest --watch",
+    "lint": "eslint . && tsc --noEmit",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "axios": "^1.6.7",
+    "dotenv": "^16.4.5",
+    "figlet": "^1.7.0",
+    "file-type": "^19.0.0",
+    "pino": "^8.19.0",
+    "pino-pretty": "^10.3.1",
+    "playwright": "^1.43.1",
+    "qrcode-terminal": "^0.12.0",
+    "terminal-kit": "^3.1.1"
+  },
+  "devDependencies": {
+    "@types/figlet": "^1.5.8",
+    "@types/node": "^20.11.30",
+    "@types/qrcode-terminal": "^0.12.2",
+    "@types/terminal-kit": "^2.5.6",
+    "@typescript-eslint/eslint-plugin": "^7.3.1",
+    "@typescript-eslint/parser": "^7.3.1",
+    "@vitest/coverage-v8": "^1.4.0",
+    "eslint": "^8.57.0",
+    "tsx": "^4.7.1",
+    "typescript": "^5.4.3",
+    "vitest": "^1.4.0"
+  }
+}

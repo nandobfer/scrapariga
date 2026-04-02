@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment — NEVER commit credentials
+.env
+.env.local
+.env.*.local
+
+# Playwright sessions (contain auth tokens)
+sessions/
+
+# Downloaded documents
+documents/
+
+# Logs
+*.log
+logs/
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/settings.json
+.idea/
+
+# Temp downloads
+*.tmp
