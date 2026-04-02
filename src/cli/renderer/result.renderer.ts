@@ -76,6 +76,48 @@ export class ResultRenderer {
         break;
       }
 
+      case 'condo-boleto': {
+        const reais = (result.amountCents / 100).toLocaleString('pt-BR', {
+          style: 'currency',
+          currency: 'BRL',
+        });
+        term.cyan(`🏢 Boleto de Condomínio\n`);
+        term.white(`   Competência: `);
+        term.bold.white(`${result.competencia}\n`);
+        term.white(`   Vencimento:  `);
+        term.bold.white(`${result.dueDate}\n`);
+        term.white(`   Valor:       `);
+        term.bold.yellow(`${reais}\n`);
+
+        if (result.pixCode) {
+          term.white(`\n   PIX (copia e cola):\n`);
+          const pix = result.pixCode;
+          term.gray(`   ┌${'─'.repeat(62)}┐\n`);
+          for (let i = 0; i < pix.length; i += 60) {
+            term.gray(`   │ `);
+            term.white(pix.slice(i, i + 60).padEnd(60));
+            term.gray(` │\n`);
+          }
+          term.gray(`   └${'─'.repeat(62)}┘\n`);
+          term.white('\n   QR Code PIX:\n');
+          qrcode.generate(result.pixCode, { small: true });
+          term('\n');
+        }
+
+        term.white(`\n   Linha Digitável:\n`);
+        const condo = result.boletoCode;
+        term.gray(`   ┌${'─'.repeat(62)}┐\n`);
+        for (let i = 0; i < condo.length; i += 60) {
+          term.gray(`   │ `);
+          term.white(condo.slice(i, i + 60).padEnd(60));
+          term.gray(` │\n`);
+        }
+        term.gray(`   └${'─'.repeat(62)}┘\n\n`);
+        term.green(`   📄 PDF: ${result.filePath}\n`);
+        term.gray(`   Tipo: ${result.mimeType} — ${result.sizeBytes.toLocaleString('pt-BR')} bytes\n`);
+        break;
+      }
+
       case 'error':
         term.red(`❌ Erro: ${result.message}\n`);
         break;

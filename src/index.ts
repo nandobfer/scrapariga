@@ -24,6 +24,7 @@ import { promptRetry } from './cli/renderer/retry.prompt.js';
 import { DemoProvider } from './providers/demo/demo.provider.js';
 import { CndProvider } from './providers/cnd/cnd.provider.js';
 import { AluguelProvider } from './providers/aluguel/aluguel.provider.js';
+import { CondominioProvider } from './providers/condominio/condominio.provider.js';
 import { PlaywrightBrowserService } from './core/browser.service.js';
 import terminal from 'terminal-kit';
 
@@ -58,6 +59,8 @@ if (process.env['NODE_ENV'] !== 'production') {
 factory.register('cnd', () => new CndProvider(new PlaywrightBrowserService(), logger));
 
 factory.register('aluguel', () => new AluguelProvider(new PlaywrightBrowserService(), logger));
+
+factory.register('condominio', () => new CondominioProvider(new PlaywrightBrowserService(), logger));
 
 // ─── Execution helper ──────────────────────────────────────────────────────
 

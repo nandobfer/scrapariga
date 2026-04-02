@@ -120,7 +120,27 @@ export interface BoletoResult {
   sizeBytes: number;
 }
 
-export type ScraperResult = FileResult | PaymentResult | BoletoResult | ErrorResult;
+export interface CondoBoletoResult {
+  type: 'condo-boleto';
+  /** Linha digitável for boleto payment */
+  boletoCode: string;
+  /** PIX copia-e-cola code (best-effort extraction; undefined if not found) */
+  pixCode?: string;
+  /** Total amount due in cents */
+  amountCents: number;
+  /** Due date as returned by the portal (DD/MM/YYYY) */
+  dueDate: string;
+  /** Competência month/year (MM/YYYY) */
+  competencia: string;
+  /** Absolute path to the saved PDF */
+  filePath: string;
+  /** Validated MIME type */
+  mimeType: string;
+  /** File size in bytes */
+  sizeBytes: number;
+}
+
+export type ScraperResult = FileResult | PaymentResult | BoletoResult | CondoBoletoResult | ErrorResult;
 
 // ---------------------------------------------------------------------------
 // Retry
