@@ -121,6 +121,8 @@ export class AluguelProvider extends BaseScraper {
 
       await this.openDocument(finalPath);
 
+      this.emitStep({ stepId: 'complete', label: 'Concluído', status: 'success' });
+
       return {
         type: 'boleto',
         boletoCode,

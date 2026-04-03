@@ -145,6 +145,8 @@ export class CopelProvider extends BaseScraper {
 
       await this.openDocument(finalPath);
 
+      this.emitStep({ stepId: 'complete', label: 'Concluído', status: 'success' });
+
       return {
         type: 'copel-bill',
         pixCode,
@@ -277,21 +279,7 @@ export class CopelProvider extends BaseScraper {
     const menuItems = bills.map((bill, idx) => `${idx + 1}  ${bill.label}`);
 
     return new Promise<number>((resolve) => {
-      const keyHandler = (name: string) => {
-        const idx = parseInt(name, 10) - 1;
-        if (!isNaN(idx) && idx >= 0 && idx < bills.length) {
-          term.removeListener('key', keyHandler);
-          setImmediate(() => {
-            this.emitStep({ stepId: 'select', label: 'Fatura selecionada', status: 'success' });
-            resolve(bills[idx].index);
-          });
-        }
-      };
-
-      term.on('key', keyHandler);
-
       void term.singleColumnMenu(menuItems, { cancelable: true }, (_err, res) => {
-        term.removeListener('key', keyHandler);
         if (res.canceled) {
           term('\n');
           process.exit(0);
@@ -365,18 +353,6 @@ export class CopelProvider extends BaseScraper {
     )?.trim() ?? '';
 
     this.emitStep({ stepId: 'extract', label: 'Dados extraídos', status: 'success' });
-
-    // Render QR code in terminal
-    term('\n');
-    term.bold.cyan('  QR Code PIX:\n');
-    qrcode.generate(pixCode, { small: true });
-
-    term('\n');
-    term.bold.white('  Valor: ');
-    term.green(`R$ ${(amountCents / 100).toFixed(2).replace('.', ',')}\n`);
-    term.bold.white('  Vencimento: ');
-    term.yellow(`${dueDate}\n`);
-    term('\n');
 
     return { pixCode, amountCents, dueDate };
   }

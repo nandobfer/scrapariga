@@ -49,6 +49,31 @@ export class EnvService {
   }
 
   /**
+   * Get the number of people to split bills by.
+   * Reads BILL_SPLIT_PEOPLE from environment.
+   * Returns 1 (no split) if not set or invalid.
+   */
+  async getSplitPeople(): Promise<number> {
+    const val = this.get('BILL_SPLIT_PEOPLE');
+    if (val) {
+      const parsed = parseInt(val, 10);
+      if (!isNaN(parsed) && parsed >= 1) return parsed;
+    }
+
+    // Prompt user if not set
+    const creds = await this.promptMissing([
+      {
+        key: 'BILL_SPLIT_PEOPLE',
+        label: 'Número de pessoas para dividir as contas',
+        description: 'Quantas pessoas dividirão o valor total das contas?',
+        sensitive: false,
+      },
+    ]);
+    const parsed = parseInt(creds['BILL_SPLIT_PEOPLE'] ?? '1', 10);
+    return isNaN(parsed) || parsed < 1 ? 1 : parsed;
+  }
+
+  /**
    * Write a key=value pair to .env atomically.
    * If the key already exists, it is updated in place.
    * If the key is new, it is appended.

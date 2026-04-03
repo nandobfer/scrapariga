@@ -141,6 +141,8 @@ export class CondominioProvider extends BaseScraper {
 
       await this.openDocument(finalPath);
 
+      this.emitStep({ stepId: 'complete', label: 'Concluído', status: 'success' });
+
       return {
         type: 'condo-boleto',
         boletoCode,

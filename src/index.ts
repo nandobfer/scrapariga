@@ -19,7 +19,9 @@ import { showNotaFiscalMenu } from './cli/menus/nota-fiscal.menu.js';
 import { EnvService } from './core/env.service.js';
 import { ProviderFactory } from './core/provider-factory.js';
 import { ProgressRenderer } from './cli/renderer/progress.renderer.js';
+import { MultiProgressRenderer } from './cli/renderer/multi-progress.renderer.js';
 import { ResultRenderer } from './cli/renderer/result.renderer.js';
+import { BillSummaryRenderer } from './cli/renderer/bill-summary.renderer.js';
 import { promptRetry } from './cli/renderer/retry.prompt.js';
 import { DemoProvider } from './providers/demo/demo.provider.js';
 import { CndProvider } from './providers/cnd/cnd.provider.js';
@@ -27,6 +29,7 @@ import { AluguelProvider } from './providers/aluguel/aluguel.provider.js';
 import { CondominioProvider } from './providers/condominio/condominio.provider.js';
 import { CopelProvider } from './providers/copel/copel.provider.js';
 import { PlaywrightBrowserService } from './core/browser.service.js';
+import type { ScraperResult } from './providers/interfaces.js';
 import terminal from 'terminal-kit';
 
 const term = terminal.terminal;
@@ -46,9 +49,14 @@ export const logger = pino(
 const envService = new EnvService();
 const factory = new ProviderFactory();
 const progressRenderer = new ProgressRenderer();
+const multiProgressRenderer = new MultiProgressRenderer();
 const resultRenderer = new ResultRenderer();
+const billSummaryRenderer = new BillSummaryRenderer();
 
 // ─── Register providers ────────────────────────────────────────────────────
+// IMPORTANT: Each provider gets its own BrowserService instance.
+// This is critical for parallel execution to avoid conflicts when multiple
+// providers try to use the same browser context simultaneously.
 
 if (process.env['NODE_ENV'] !== 'production') {
   factory.register('demo', () => {
@@ -92,6 +100,71 @@ async function executeProvider(providerId: string): Promise<void> {
   }
 
   await resultRenderer.render(result);
+}
+
+async function executeAllParallel(providerIds: string[]): Promise<void> {
+  const providers = providerIds.map((id) => factory.create(id));
+
+  // Collect all credentials before starting any provider
+  const allCredentials: Record<string, Record<string, string>> = {};
+  for (const provider of providers) {
+    allCredentials[provider.name] = await envService.promptMissing(
+      provider.requiredCredentials,
+    );
+  }
+
+  // Get split people count (prompt if not set)
+  const splitPeople = await envService.getSplitPeople();
+
+  multiProgressRenderer.init(providers.map((p) => p.name));
+
+  // Execute all providers in parallel with silent callbacks
+  const results = await Promise.allSettled(
+    providers.map((provider) =>
+      provider.run(allCredentials[provider.name], (event) => {
+        // Only update progress bar, don't let provider print to console
+        multiProgressRenderer.update(provider.name, event);
+      }),
+    ),
+  );
+
+  multiProgressRenderer.dispose();
+
+  // Extract successful results
+  const successfulResults = results
+    .filter(
+      (r): r is PromiseFulfilledResult<ScraperResult> =>
+        r.status === 'fulfilled' && r.value.type !== 'error',
+    )
+    .map((r) => r.value);
+
+  // Extract errors
+  const errors: Array<{ name: string; message: string }> = [];
+
+  results.forEach((r, idx) => {
+    const provider = providers[idx];
+    if (r.status === 'rejected') {
+      errors.push({
+        name: provider.name,
+        message: r.reason instanceof Error ? r.reason.message : String(r.reason),
+      });
+    } else if (r.value.type === 'error') {
+      errors.push({ name: provider.name, message: r.value.message });
+    }
+  });
+
+  // Render financial summary
+  billSummaryRenderer.render(successfulResults, splitPeople);
+
+  // Display errors if any
+  if (errors.length > 0) {
+    term('\n');
+    term.red('─── Erros durante a execução ───\n');
+    for (const e of errors) {
+      term.red(`  ❌ ${e.name}: ${e.message}\n`);
+    }
+    term('\n');
+  }
 }
 
 async function executeTodos(providerIds: string[]): Promise<void> {
@@ -208,7 +281,7 @@ async function main(): Promise<void> {
       const sub = await showContasMenu();
       if (sub.action === 'back') continue;
       if (sub.action === 'all') {
-        await executeTodos(sub.providerIds ?? []);
+        await executeAllParallel(sub.providerIds ?? []);
       } else if (sub.action === 'provider' && sub.providerId) {
         if (factory.has(sub.providerId)) {
           await executeProvider(sub.providerId);
