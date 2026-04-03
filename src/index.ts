@@ -28,6 +28,7 @@ import { CndProvider } from './providers/cnd/cnd.provider.js';
 import { AluguelProvider } from './providers/aluguel/aluguel.provider.js';
 import { CondominioProvider } from './providers/condominio/condominio.provider.js';
 import { CopelProvider } from './providers/copel/copel.provider.js';
+import { ComprovantePagamentoProvider } from './providers/comprovante-pagamento/comprovante-pagamento.provider.js';
 import { PlaywrightBrowserService } from './core/browser.service.js';
 import type { ScraperResult } from './providers/interfaces.js';
 import terminal from 'terminal-kit';
@@ -65,13 +66,18 @@ if (process.env['NODE_ENV'] !== 'production') {
   });
 }
 
-factory.register('cnd', () => new CndProvider(new PlaywrightBrowserService(), logger));
+factory.register('cnd', () => new CndProvider(new PlaywrightBrowserService({ headless: false }), logger));
 
 factory.register('aluguel', () => new AluguelProvider(new PlaywrightBrowserService(), logger));
 
 factory.register('condominio', () => new CondominioProvider(new PlaywrightBrowserService(), logger));
 
 factory.register('copel', () => new CopelProvider(new PlaywrightBrowserService(), logger));
+
+factory.register(
+  'comprovante-pagamento',
+  () => new ComprovantePagamentoProvider(new PlaywrightBrowserService(), logger),
+);
 
 // ─── Execution helper ──────────────────────────────────────────────────────
 

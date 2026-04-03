@@ -24,15 +24,24 @@ export interface BrowserService {
 // PlaywrightBrowserService
 // ---------------------------------------------------------------------------
 
+export interface PlaywrightBrowserServiceOptions {
+  headless?: boolean;
+}
+
 export class PlaywrightBrowserService implements BrowserService {
   private context: BrowserContext | null = null;
+  private readonly headless: boolean;
+
+  constructor(options: PlaywrightBrowserServiceOptions = {}) {
+    this.headless = options.headless ?? true;
+  }
 
   async newPage(storageState?: SessionState): Promise<Page> {
     if (this.context) {
       await this.context.close();
       this.context = null;
     }
-    const browser = await chromium.launch({ headless: true });
+    const browser = await chromium.launch({ headless: this.headless });
     this.context = await browser.newContext(
       storageState ? { storageState } : undefined,
     );

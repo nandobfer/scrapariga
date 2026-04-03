@@ -1,17 +1,15 @@
 /**
  * cnd.provider.spec.ts — Unit tests for CndProvider.
  *
- * Tests the Playwright interaction flow with a mocked Page object.
+ * Tests the manual flow: navigate, fill CNPJ, inject overlay, wait for close.
  * All browser calls are intercepted; no network access occurs.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CndProvider } from '../../../src/providers/cnd/cnd.provider.js';
 import type { BrowserService } from '../../../src/providers/base-scraper.js';
 import type { Page } from 'playwright';
 import { pino } from 'pino';
-import fs from 'node:fs/promises';
-import path from 'node:path';
 
 const logger = pino({ level: 'silent' });
 
@@ -61,15 +59,13 @@ describe('CndProvider', () => {
   describe('navigateAndFill()', () => {
     it('navigates to the Receita Federal CND URL', async () => {
       const input = makeLocatorStub();
-      const button = makeLocatorStub();
       const mockPage = {
         goto: vi.fn().mockResolvedValue(undefined),
-        locator: vi.fn().mockImplementation((sel: string) =>
-          sel.includes('niContribuinte') ? input : button,
-        ),
+        locator: vi.fn().mockReturnValue(input),
       };
 
-      await provider.navigateAndFill(mockPage as unknown as Page, { CNPJ: '12345678000195' });
+      await (provider as unknown as { navigateAndFill: (p: Page, c: Record<string, string>) => Promise<void> })
+        .navigateAndFill(mockPage as unknown as Page, { CNPJ: '12345678000195' });
 
       expect(mockPage.goto).toHaveBeenCalledWith(
         'https://servicos.receitafederal.gov.br/servico/certidoes/#/home/cnpj',
@@ -79,131 +75,76 @@ describe('CndProvider', () => {
 
     it('formats a 14-digit CNPJ before filling', async () => {
       const input = makeLocatorStub();
-      const button = makeLocatorStub();
       const mockPage = {
         goto: vi.fn().mockResolvedValue(undefined),
-        locator: vi.fn().mockImplementation((sel: string) =>
-          sel.includes('niContribuinte') ? input : button,
-        ),
+        locator: vi.fn().mockReturnValue(input),
       };
 
-      await provider.navigateAndFill(mockPage as unknown as Page, { CNPJ: '12345678000195' });
+      await (provider as unknown as { navigateAndFill: (p: Page, c: Record<string, string>) => Promise<void> })
+        .navigateAndFill(mockPage as unknown as Page, { CNPJ: '12345678000195' });
 
       expect(input.fill).toHaveBeenCalledWith('12.345.678/0001-95');
     });
 
     it('passes already-masked CNPJ through unchanged', async () => {
       const input = makeLocatorStub();
-      const button = makeLocatorStub();
       const mockPage = {
         goto: vi.fn().mockResolvedValue(undefined),
-        locator: vi.fn().mockImplementation((sel: string) =>
-          sel.includes('niContribuinte') ? input : button,
-        ),
+        locator: vi.fn().mockReturnValue(input),
       };
 
-      await provider.navigateAndFill(mockPage as unknown as Page, { CNPJ: '12.345.678/0001-95' });
+      await (provider as unknown as { navigateAndFill: (p: Page, c: Record<string, string>) => Promise<void> })
+        .navigateAndFill(mockPage as unknown as Page, { CNPJ: '12.345.678/0001-95' });
 
       expect(input.fill).toHaveBeenCalledWith('12.345.678/0001-95');
     });
 
-    it('clicks the secondary button after filling CNPJ', async () => {
+    it('does NOT click any button after filling (manual mode)', async () => {
       const input = makeLocatorStub();
-      const button = makeLocatorStub();
       const mockPage = {
         goto: vi.fn().mockResolvedValue(undefined),
-        locator: vi.fn().mockImplementation((sel: string) =>
-          sel.includes('niContribuinte') ? input : button,
-        ),
+        locator: vi.fn().mockReturnValue(input),
       };
 
-      await provider.navigateAndFill(mockPage as unknown as Page, { CNPJ: '12345678000195' });
+      await (provider as unknown as { navigateAndFill: (p: Page, c: Record<string, string>) => Promise<void> })
+        .navigateAndFill(mockPage as unknown as Page, { CNPJ: '12345678000195' });
 
-      expect(button.click).toHaveBeenCalled();
+      expect(input.click).not.toHaveBeenCalled();
     });
   });
 
-  // ─── waitForResult() ───────────────────────────────────────────────────────
+  // ─── run() manual flow ─────────────────────────────────────────────────────
 
-  describe('waitForResult()', () => {
-    it('waits for the Segunda via button', async () => {
+  describe('run()', () => {
+    it('returns ManualResult after page is closed', async () => {
+      const input = makeLocatorStub();
       const mockPage = {
+        goto: vi.fn().mockResolvedValue(undefined),
+        locator: vi.fn().mockReturnValue(input),
+        evaluate: vi.fn().mockResolvedValue(undefined),
+        waitForEvent: vi.fn().mockResolvedValue(undefined),
+        close: vi.fn().mockResolvedValue(undefined),
+      };
+
+      vi.mocked(mockBrowserService.newPage).mockResolvedValue(mockPage as unknown as Page);
+
+      const result = await provider.run({ CNPJ: '12345678000195' }, vi.fn());
+
+      expect(result.type).toBe('manual');
+    });
+
+    it('returns ErrorResult if navigation fails', async () => {
+      const mockPage = {
+        goto: vi.fn().mockRejectedValue(new Error('net::ERR_NAME_NOT_RESOLVED')),
         locator: vi.fn().mockReturnValue(makeLocatorStub()),
-        waitForSelector: vi.fn().mockResolvedValue(undefined),
+        close: vi.fn().mockResolvedValue(undefined),
       };
 
-      await provider.waitForResult(mockPage as unknown as Page);
+      vi.mocked(mockBrowserService.newPage).mockResolvedValue(mockPage as unknown as Page);
 
-      expect(mockPage.waitForSelector).toHaveBeenCalledWith(
-        'button[title="Segunda via"]',
-        expect.any(Object),
-      );
-    });
-  });
+      const result = await provider.run({ CNPJ: '12345678000195' }, vi.fn());
 
-  // ─── downloadCertidao() ────────────────────────────────────────────────────
-
-  describe('downloadCertidao()', () => {
-    const finalPath = path.join(process.cwd(), 'documents', 'certidao-negativa-debitos', 'test.pdf');
-    const docsDir = path.dirname(finalPath);
-
-    afterEach(async () => {
-      await fs.rm(docsDir, { recursive: true, force: true });
-      const entries = await fs.readdir(process.cwd()).catch(() => [] as string[]);
-      await Promise.all(
-        entries
-          .filter((f) => f.startsWith('cnd-') && f.endsWith('.tmp'))
-          .map((f) => fs.unlink(path.join(process.cwd(), f)).catch(() => undefined)),
-      );
-    });
-
-    it('saves the downloaded PDF and returns mimeType and sizeBytes', async () => {
-      const fakeContent = Buffer.from('%PDF-1.4\n\nfake content\n%%EOF\n');
-      const mockDownloadEvent = {
-        saveAs: vi.fn().mockImplementation(async (savePath: string) => {
-          await fs.writeFile(savePath, fakeContent);
-        }),
-      };
-
-      const downloadBtn = makeLocatorStub();
-      const mockPage = {
-        locator: vi.fn().mockReturnValue(downloadBtn),
-        waitForEvent: vi.fn().mockResolvedValue(mockDownloadEvent),
-      };
-
-      const result = await provider.downloadCertidao(mockPage as unknown as Page, finalPath);
-
-      expect(result.mimeType).toBe('application/pdf');
-      expect(result.sizeBytes).toBeGreaterThan(0);
-      await expect(fs.stat(finalPath)).resolves.toBeDefined();
-    });
-
-    it('registers the download listener before clicking (correct Playwright pattern)', async () => {
-      const callOrder: string[] = [];
-      const fakeContent = Buffer.from('%PDF-1.4\n%%EOF\n');
-      const mockDownloadEvent = {
-        saveAs: vi.fn().mockImplementation(async (savePath: string) => {
-          await fs.writeFile(savePath, fakeContent);
-        }),
-      };
-
-      const downloadBtn = makeLocatorStub({
-        click: vi.fn().mockImplementation(() => {
-          callOrder.push('click');
-          return Promise.resolve(undefined);
-        }),
-      });
-      const mockPage = {
-        locator: vi.fn().mockReturnValue(downloadBtn),
-        waitForEvent: vi.fn().mockImplementation(() => {
-          callOrder.push('waitForEvent');
-          return Promise.resolve(mockDownloadEvent);
-        }),
-      };
-
-      await provider.downloadCertidao(mockPage as unknown as Page, finalPath);
-
-      expect(callOrder[0]).toBe('waitForEvent');
+      expect(result.type).toBe('error');
     });
   });
 });

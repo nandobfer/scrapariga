@@ -3,22 +3,24 @@
  *
  * URL: https://servicos.receitafederal.gov.br/servico/certidoes/#/home/cnpj
  *
- * Flow (inside run()):
- *   navigateAndFill()  → navigate, fill CNPJ, click "Consultar Certidão"
- *   waitForResult()    → wait for the download button to appear
- *   downloadCertidao() → click "Segunda via", intercept download, save PDF
+ * NOTA: O download automático não é possível pois o site utiliza auto-captcha
+ * que não pode ser bypassado de forma confiável. Por isso, este provider apenas
+ * abre o browser em modo headed, preenche o CNPJ e exibe um overlay com
+ * instruções para o usuário baixar a certidão manualmente.
  *
- * Selectors (all confirmed via browser DevTools):
- *   input[name="niContribuinte"]                   → CNPJ input
- *   button.br-button.secondary hasText "Consultar" → submit CNPJ form
- *   button[title="Segunda via"]                     → download PDF
+ * Flow (inside run()):
+ *   navigateAndFill()  → navigate, fill CNPJ (sem clicar em nenhum botão)
+ *   injectInstructions() → injeta overlay HTML com passos para download manual
+ *   waitForClose()     → aguarda o usuário fechar a janela do browser
+ *
+ * Selectors:
+ *   input[name="niContribuinte"]  → CNPJ input
  */
 
-import path from 'node:path';
 import type { Page } from 'playwright';
 import type { Logger } from 'pino';
 import { BaseScraper, type BrowserService } from '../base-scraper.js';
-import type { EnvCredential, ProgressCallback, ScraperResult } from '../interfaces.js';
+import type { EnvCredential, ManualResult, ProgressCallback, ScraperResult } from '../interfaces.js';
 
 const CND_URL = 'https://servicos.receitafederal.gov.br/servico/certidoes/#/home/cnpj';
 
@@ -60,68 +62,49 @@ export class CndProvider extends BaseScraper {
   ): Promise<ScraperResult> {
     this._progressCallback = onProgress;
 
-    const sessionState = await this.loadSession();
-    const page = await this.browserService.newPage(sessionState);
+    const page = await this.browserService.newPage();
 
     try {
-      await this.retry(
-        () => this.navigateAndFill(page, credentials),
-        {
-          maxAttempts: 3,
-          baseDelayMs: 1000,
-          onAttempt: (attempt, error) => {
-            this.emitStep({ stepId: 'login', label: `Preenchendo formulário (tentativa ${attempt}/3)...`, status: 'error' });
-            this.logger.warn({ attempt, err: error.message }, 'navigateAndFill retry');
-          },
-        },
-      );
-
-      await this.waitForResult(page);
-
-      await this.debugShot(page, 'cnd-result');
-
-      const finalPath = this.buildFilePath('certidao-negativa-debitos', 'pdf');
-      const { mimeType, sizeBytes } = await this.retry(
-        () => this.downloadCertidao(page, finalPath),
-        {
-          maxAttempts: 3,
-          baseDelayMs: 1000,
-          onAttempt: (attempt, error) => {
-            this.emitStep({ stepId: 'download', label: `Baixando certidão (tentativa ${attempt}/3)...`, status: 'error' });
-            this.logger.warn({ attempt, err: error.message }, 'downloadCertidao retry');
-          },
-        },
-      );
-
-      await this.persistSession(page.context());
-
-      this.emitStep({
-        stepId: 'download',
-        label: `Certidão salva: ${path.basename(finalPath)}`,
-        status: 'success',
-      });
-
-      return {
-        type: 'file',
-        filePath: finalPath,
-        mimeType,
-        sizeBytes,
-      };
+      await this.navigateAndFill(page, credentials);
     } catch (err) {
-      this.logger.error({ err }, 'CndProvider run() failed');
+      await page.close().catch(() => undefined);
+      this.logger.error({ err }, 'CndProvider navigateAndFill failed');
       return {
         type: 'error',
         message: err instanceof Error ? err.message : String(err),
         cause: err,
       };
-    } finally {
-      await page.close();
     }
+
+    await this.injectInstructions(page, formatCnpj(credentials['CNPJ'] ?? ''));
+
+    this.emitStep({
+      stepId: 'manual',
+      label: 'Navegador aberto — siga as instruções na janela do browser',
+      status: 'warning',
+    });
+
+    this.logger.info('CndProvider waiting for user to close the browser manually');
+
+    // Wait indefinitely until the user closes the browser window
+    await page.waitForEvent('close', { timeout: 0 }).catch(() => undefined);
+
+    const result: ManualResult = {
+      type: 'manual',
+      message:
+        'O download da certidão não pôde ser automatizado (CAPTCHA da Receita Federal). ' +
+        'A certidão deve ter sido baixada manualmente pelo usuário. ' +
+        'Verifique sua pasta de downloads.',
+      url: CND_URL,
+    };
+
+    this.emitStep({ stepId: 'manual', label: 'Janela fechada — retornando ao menu', status: 'success' });
+    return result;
   }
 
-  // ─── Step 1: Navigate, fill CNPJ, click "Consultar Certidão" ─────────────
+  // ─── Step 1: Navigate and fill CNPJ (no button click) ────────────────────
 
-  async navigateAndFill(page: Page, credentials: Record<string, string>): Promise<void> {
+  protected async navigateAndFill(page: Page, credentials: Record<string, string>): Promise<void> {
     this.emitStep({ stepId: 'login', label: 'Abrindo página da Receita Federal...', status: 'pending' });
 
     await page.goto(CND_URL, { waitUntil: 'load' });
@@ -133,75 +116,54 @@ export class CndProvider extends BaseScraper {
     await input.waitFor({ state: 'visible', timeout: 15_000 });
     await input.fill(cnpj);
 
-    const consultarBtn = page
-      .locator('button.br-button.secondary')
-      .filter({ hasText: 'Consultar' });
-    await consultarBtn.waitFor({ state: 'visible', timeout: 10_000 });
-    await consultarBtn.click();
-
-    this.emitStep({ stepId: 'login', label: 'Formulário enviado', status: 'success' });
+    this.emitStep({ stepId: 'login', label: 'CNPJ preenchido', status: 'success' });
   }
 
-  // ─── Step 2: Wait for the result page ────────────────────────────────────
+  // ─── Step 2: Inject floating overlay with manual instructions ────────────
 
-  async waitForResult(page: Page): Promise<void> {
-    this.emitStep({ stepId: 'fetch', label: 'Aguardando resultado da consulta...', status: 'pending' });
+  private async injectInstructions(page: Page, cnpj: string): Promise<void> {
+    await page.evaluate((formattedCnpj: string) => {
+      const div = document.createElement('div');
+      div.id = 'scrapariga-overlay';
+      div.style.cssText = [
+        'position: fixed',
+        'top: 20px',
+        'right: 20px',
+        'z-index: 2147483647',
+        'background: #0f172a',
+        'color: #f1f5f9',
+        'padding: 20px 24px',
+        'border-radius: 10px',
+        'font-family: monospace',
+        'font-size: 13px',
+        'max-width: 360px',
+        'border: 2px solid #f59e0b',
+        'box-shadow: 0 8px 32px rgba(0,0,0,0.6)',
+        'line-height: 1.6',
+      ].join('; ');
 
-    await page.waitForSelector('button[title="Segunda via"]', { timeout: 30_000 });
+      div.innerHTML = `
+        <div style="font-size:15px; font-weight:bold; color:#f59e0b; margin-bottom:10px;">
+          🤖 SCRAPARIGA — Download Manual
+        </div>
+        <div style="color:#fbbf24; margin-bottom:8px;">
+          ⚠️ Download automático indisponível<br>
+          <span style="color:#94a3b8; font-size:12px;">(auto-captcha da Receita Federal)</span>
+        </div>
+        <div style="margin-bottom:6px; color:#cbd5e1; font-weight:bold;">Como baixar a certidão:</div>
+        <ol style="margin:0; padding-left:18px; color:#e2e8f0;">
+          <li>Resolva o CAPTCHA na página</li>
+          <li>Clique em <strong style="color:#f1f5f9">"Consultar Certidão"</strong></li>
+          <li>Clique em <strong style="color:#f1f5f9">"Segunda via"</strong> para baixar o PDF</li>
+          <li><strong style="color:#f59e0b">Feche esta janela</strong> quando terminar</li>
+        </ol>
+        <div style="margin-top:10px; color:#64748b; font-size:11px;">
+          CNPJ: ${formattedCnpj}
+        </div>
+      `;
 
-    this.emitStep({ stepId: 'fetch', label: '1 certidão disponível para download', status: 'success' });
-  }
-
-  // ─── Step 3: Click "Segunda via", capture Playwright download, save PDF ──
-
-  async downloadCertidao(
-    page: Page,
-    finalPath: string,
-  ): Promise<{ mimeType: string; sizeBytes: number }> {
-    this.emitStep({ stepId: 'download', label: 'Iniciando download da certidão...', status: 'pending' });
-
-    const downloadButton = page.locator('button[title="Segunda via"]');
-    await downloadButton.waitFor({ state: 'visible', timeout: 10_000 });
-
-    // Register the download listener BEFORE click to avoid missing the event
-    const [downloadEvent] = await Promise.all([
-      page.waitForEvent('download'),
-      downloadButton.click(),
-    ]);
-
-    this.emitStep({ stepId: 'download', label: 'Baixando arquivo...', status: 'pending' });
-
-    // Save via Playwright's built-in download API (no direct URL available)
-    const tmpPath = path.join(process.cwd(), `cnd-${Date.now()}.tmp`);
-    await downloadEvent.saveAs(tmpPath);
-
-    // Re-use base class validation + move logic via downloadFile workaround:
-    // since we already have the file at tmpPath, validate and move manually.
-    const fs = await import('node:fs/promises');
-    const { fileTypeFromBuffer } = await import('file-type');
-    const allowedMimes = ['application/pdf'];
-
-    const buf = await fs.readFile(tmpPath);
-    const detected = await fileTypeFromBuffer(buf);
-
-    if (!detected || !allowedMimes.includes(detected.mime)) {
-      await fs.unlink(tmpPath).catch(() => undefined);
-      throw new Error(
-        `Invalid MIME type: expected one of [${allowedMimes.join(', ')}], got ${detected?.mime ?? 'unknown'}`,
-      );
-    }
-
-    await fs.mkdir(path.dirname(finalPath), { recursive: true });
-
-    try {
-      await fs.rename(tmpPath, finalPath);
-    } catch {
-      await fs.copyFile(tmpPath, finalPath);
-      await fs.unlink(tmpPath).catch(() => undefined);
-    }
-
-    const stat = await fs.stat(finalPath);
-    return { mimeType: detected.mime, sizeBytes: stat.size };
+      document.body.appendChild(div);
+    }, cnpj);
   }
 }
 

@@ -147,6 +147,12 @@ export class ResultRenderer {
         break;
       }
 
+      case 'manual':
+        term.yellow(`✋ Download manual solicitado\n`);
+        term.white(`   ${result.message}\n`);
+        term.gray(`   URL: ${result.url}\n`);
+        break;
+
       case 'error':
         term.red(`❌ Erro: ${result.message}\n`);
         break;

@@ -76,6 +76,14 @@ export interface DocumentMetadata {
 // Scraper Results (discriminated union)
 // ---------------------------------------------------------------------------
 
+export interface ManualResult {
+  type: 'manual';
+  /** Human-readable message shown in the result renderer */
+  message: string;
+  /** URL that was opened for manual interaction */
+  url: string;
+}
+
 export interface FileResult {
   type: 'file';
   /** Absolute path to the saved file */
@@ -156,7 +164,7 @@ export interface CopelBillResult {
   sizeBytes: number;
 }
 
-export type ScraperResult = FileResult | PaymentResult | BoletoResult | CondoBoletoResult | CopelBillResult | ErrorResult;
+export type ScraperResult = FileResult | PaymentResult | BoletoResult | CondoBoletoResult | CopelBillResult | ManualResult | ErrorResult;
 
 // ---------------------------------------------------------------------------
 // Retry
