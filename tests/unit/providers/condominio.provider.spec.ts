@@ -101,6 +101,12 @@ describe('CondominioProvider', () => {
       const entrarAgoraBtn = makeLocatorStub();
       const entrarBtn = makeLocatorStub();
 
+      // Password locator with isVisible false (hidden initially)
+      const passwordLocator = {
+        ...passwordInput,
+        isVisible: vi.fn().mockResolvedValue(false),
+      };
+
       // Mock for race condition: email input appears (login page)
       const emailLocatorWithWait = {
         ...emailInput,
@@ -122,7 +128,7 @@ describe('CondominioProvider', () => {
           locatorCalls.push(sel);
           if (sel === '.bloco-grid-cobrancas') return gridLocator;
           if (sel === '#email') return emailLocatorWithWait;
-          if (sel === 'input[name="senha"]') return passwordInput;
+          if (sel === '#senha') return passwordLocator;
           if (sel === 'input[value="Entrar Agora"]') return entrarAgoraBtn;
           if (sel === 'input[value="Entrar"]') return entrarBtn;
           return makeLocatorStub();
@@ -135,6 +141,7 @@ describe('CondominioProvider', () => {
       });
 
       expect(emailInput.fill).toHaveBeenCalledWith('user@example.com');
+      expect(passwordLocator.isVisible).toHaveBeenCalled();
       expect(entrarAgoraBtn.click).toHaveBeenCalled();
       expect(passwordInput.fill).toHaveBeenCalledWith('secret');
       expect(entrarBtn.click).toHaveBeenCalled();

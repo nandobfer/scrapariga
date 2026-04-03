@@ -34,22 +34,24 @@ export async function showMainMenu(): Promise<MainMenuResult> {
   ];
 
   return new Promise<MainMenuResult>((resolve) => {
-    // Number key shortcut handler
+    let numberSelected: MainMenuResult | null = null;
+
     const keyHandler = (name: string) => {
       const idx = parseInt(name, 10) - 1;
       if (!isNaN(idx) && idx >= 0 && idx < items.length) {
+        numberSelected = mapping[idx];
         term.removeListener('key', keyHandler);
-        // Give terminal-kit time to clean up menu state
-        setImmediate(() => resolve(mapping[idx]));
+        menuController.stop(true);
       }
     };
 
-    term.on('key', keyHandler);
-
-    void term.singleColumnMenu(items, { cancelable: true }, (_err, res) => {
+    const menuController = term.singleColumnMenu(items, { cancelable: true }, (_err, res) => {
       term.removeListener('key', keyHandler);
+      if (numberSelected) { term('\n'); resolve(numberSelected); return; }
       if (res.canceled) { term('\n'); process.exit(0); }
       resolve(mapping[res.selectedIndex]);
-    });
+    }) as { stop: (erase: boolean) => void };
+
+    term.on('key', keyHandler);
   });
 }

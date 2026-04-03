@@ -36,20 +36,24 @@ export async function showNotaFiscalMenu(): Promise<SubMenuResult> {
   term.bold.white('  Nota Fiscal\n\n');
 
   return new Promise<SubMenuResult>((resolve) => {
+    let numberSelected: SubMenuResult | null = null;
+
     const keyHandler = (name: string) => {
       const idx = parseInt(name, 10) - 1;
       if (!isNaN(idx) && idx >= 0 && idx < ITEMS.length) {
+        numberSelected = MAPPING[idx];
         term.removeListener('key', keyHandler);
-        setImmediate(() => resolve(MAPPING[idx]));
+        menuController.stop(true);
       }
     };
 
-    term.on('key', keyHandler);
-
-    void term.singleColumnMenu(ITEMS, { cancelable: true }, (_err, res) => {
+    const menuController = term.singleColumnMenu(ITEMS, { cancelable: true }, (_err, res) => {
       term.removeListener('key', keyHandler);
+      if (numberSelected) { term('\n'); resolve(numberSelected); return; }
       if (res.canceled) { term('\n'); process.exit(0); }
       resolve(MAPPING[res.selectedIndex]);
-    });
+    }) as { stop: (erase: boolean) => void };
+
+    term.on('key', keyHandler);
   });
 }
