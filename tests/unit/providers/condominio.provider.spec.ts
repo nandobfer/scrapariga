@@ -101,15 +101,27 @@ describe('CondominioProvider', () => {
       const entrarAgoraBtn = makeLocatorStub();
       const entrarBtn = makeLocatorStub();
 
+      // Mock for race condition: email input appears (login page)
+      const emailLocatorWithWait = {
+        ...emailInput,
+        waitFor: vi.fn().mockResolvedValue(undefined),
+      };
+
+      // Mock for race condition: grid never appears (timeout)
+      const gridLocator = {
+        first: vi.fn().mockReturnThis(),
+        waitFor: vi.fn().mockImplementation(
+          () => new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 20_000)),
+        ),
+      };
+
       const mockPage = {
         goto: vi.fn().mockResolvedValue(undefined),
         waitForSelector: vi.fn().mockResolvedValue(undefined),
         locator: vi.fn().mockImplementation((sel: string) => {
           locatorCalls.push(sel);
-          if (sel === '.bloco-grid-cobrancas') {
-            return { isVisible: vi.fn().mockResolvedValue(false) };
-          }
-          if (sel === '#email') return emailInput;
+          if (sel === '.bloco-grid-cobrancas') return gridLocator;
+          if (sel === '#email') return emailLocatorWithWait;
           if (sel === 'input[name="senha"]') return passwordInput;
           if (sel === 'input[value="Entrar Agora"]') return entrarAgoraBtn;
           if (sel === 'input[value="Entrar"]') return entrarBtn;
@@ -130,13 +142,26 @@ describe('CondominioProvider', () => {
 
     it('skips login when .bloco-grid-cobrancas is already visible (session restored)', async () => {
       const emailInput = makeLocatorStub();
+
+      // Mock for race condition: grid appears immediately (session restored)
+      const gridLocator = {
+        first: vi.fn().mockReturnThis(),
+        waitFor: vi.fn().mockResolvedValue(undefined),
+      };
+
+      // Mock for race condition: email never appears (will be ignored by Promise.race)
+      const emailLocator = {
+        waitFor: vi.fn().mockImplementation(
+          () => new Promise((resolve) => setTimeout(resolve, 30_000)),
+        ),
+      };
+
       const mockPage = {
         goto: vi.fn().mockResolvedValue(undefined),
         waitForSelector: vi.fn().mockResolvedValue(undefined),
         locator: vi.fn().mockImplementation((sel: string) => {
-          if (sel === '.bloco-grid-cobrancas') {
-            return { isVisible: vi.fn().mockResolvedValue(true) };
-          }
+          if (sel === '.bloco-grid-cobrancas') return gridLocator;
+          if (sel === '#email') return emailLocator;
           return emailInput;
         }),
       } as unknown as Page;
@@ -146,6 +171,9 @@ describe('CondominioProvider', () => {
         CONDO_PASSWORD: 'secret',
       });
 
+      // Grid appeared first, so login was skipped
+      expect(gridLocator.first).toHaveBeenCalled();
+      expect(gridLocator.waitFor).toHaveBeenCalled();
       // email input should NOT have been filled
       expect(emailInput.fill).not.toHaveBeenCalled();
     });

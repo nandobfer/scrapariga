@@ -85,7 +85,6 @@ export class CondominioProvider extends BaseScraper {
         },
       );
 
-      await this.debugShot(page, 'logged-in');
 
       boletoPage = await this.retry(
         () => this.openBoleto(page),
@@ -99,7 +98,6 @@ export class CondominioProvider extends BaseScraper {
         },
       );
 
-      await this.debugShot(boletoPage, 'boleto-tab');
 
       const { amountCents, dueDate, competencia } = await this.readBoletoData(boletoPage);
 
@@ -108,8 +106,7 @@ export class CondominioProvider extends BaseScraper {
       // There are 3 a.pagarBoleto in the DOM; the first one (pagarComBoleto() with no arg) is the real button.
       this.emitStep({ stepId: 'fetch', label: 'Abrindo opções de pagamento...', status: 'pending' });
       await boletoPage.locator('a.pagarBoleto').first().click();
-      await boletoPage.waitForSelector('#parcela-0', { state: 'visible', timeout: 20_000 });
-      await this.debugShot(boletoPage, 'payment-section');
+      await boletoPage.waitForSelector("#parcela-0", { state: "visible", timeout: 20_000 })
 
       // PIX is read while the PIX QR is still the active view
       const pixCode = await this.extractPixCode(boletoPage);
@@ -174,32 +171,62 @@ export class CondominioProvider extends BaseScraper {
 
     await page.goto(CONDO_URL, { waitUntil: 'networkidle', timeout: 30_000 });
 
-    // If already logged in (session restored), the boleto grid will be visible
-    const alreadyLoggedIn = await page
-      .locator('.bloco-grid-cobrancas')
-      .isVisible()
-      .catch(() => false);
+    // Wait to see which element appears first: grid (logged in) or email input (login page)
+    // Use 'attached' state instead of 'visible' because grid may be rendered but not fully visible yet
+    const pageState = await Promise.race([
+      page
+        .locator('.bloco-grid-cobrancas')
+        .first()
+        .waitFor({ state: 'attached', timeout: 15_000 })
+        .then(() => 'logged-in' as const),
+      page
+        .locator('#email')
+        .waitFor({ state: 'visible', timeout: 15_000 })
+        .then(() => 'login-page' as const),
+    ]).catch(() => 'unknown' as const);
 
-    if (alreadyLoggedIn) {
+    if (pageState === 'logged-in') {
+      // Session restored, skip login
       this.emitStep({ stepId: 'login', label: 'Sessão restaurada', status: 'success' });
       return;
     }
 
+    if (pageState === 'unknown') {
+      throw new Error('Timeout: nem login nem grid de cobranças apareceram após 15 segundos');
+    }
+
+    // pageState === 'login-page', proceed with login flow
     this.emitStep({ stepId: 'login', label: 'Preenchendo e-mail...', status: 'pending' });
 
     const email = credentials['CONDO_EMAIL'] ?? '';
     const password = credentials['CONDO_PASSWORD'] ?? '';
 
-    await page.locator('#email').waitFor({ state: 'visible', timeout: 15_000 });
+    // Email field is already visible from the race condition check above
     await page.locator('#email').fill(email);
-    await page.locator('input[value="Entrar Agora"]').click();
 
-    this.emitStep({ stepId: 'login', label: 'Preenchendo senha...', status: 'pending' });
+    // Check if password field is already visible (returning user) or hidden (new user)
+    // Scenario 1 (new user): #senha is hidden → click "Entrar Agora" → #senha becomes visible
+    // Scenario 2 (returning user): #senha is already visible → skip "Entrar Agora" button
+    const passwordVisible = await page
+      .locator('#senha')
+      .isVisible()
+      .catch(() => false);
 
-    // Wait for the password field to appear in the second step
-    await page.waitForSelector('input[name="senha"]', { state: 'visible', timeout: 15_000 });
-    await page.locator('input[name="senha"]').fill(password);
-    await page.locator('input[value="Entrar"]').click();
+    if (passwordVisible) {
+      // Scenario 2: password field already visible, login directly
+      this.emitStep({ stepId: 'login', label: 'Preenchendo senha...', status: 'pending' });
+      await page.locator('#senha').fill(password);
+      await page.locator('input[value="Entrar"]').click();
+    } else {
+        // Scenario 1: need to click "Entrar Agora" to reveal password field
+        this.emitStep({ stepId: "login", label: "Verificando e-mail...", status: "pending" })
+        await page.locator('input[value="Entrar Agora"]').click()
+
+        this.emitStep({ stepId: "login", label: "Preenchendo senha...", status: "pending" })
+        await page.locator("#senha").waitFor({ state: "visible", timeout: 15_000 })
+        await page.locator("#senha").fill(password)
+        await page.locator('input[value="Entrar"]').click()
+    }
 
     // Wait for the boleto list to confirm successful login
     await page.waitForSelector('.bloco-grid-cobrancas', { timeout: 30_000 });
@@ -308,9 +335,7 @@ export class CondominioProvider extends BaseScraper {
     this.emitStep({ stepId: 'fetch', label: 'Obtendo linha digitável...', status: 'pending' });
 
     // Clicking parcela-0 reveals the barcode textarea and the Imprimir button
-    await this.debugShot(page, 'boleto-tab-antes');
     await page.locator('#parcela-0').click();
-    await this.debugShot(page, 'boleto-tab-parcela0');
     await page.waitForSelector('textarea.text', { state: 'visible', timeout: 10_000 });
 
     const boletoCode = (await page.locator('textarea.text').inputValue().catch(() => '')).trim();
