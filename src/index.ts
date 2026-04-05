@@ -66,7 +66,7 @@ if (process.env['NODE_ENV'] !== 'production') {
   });
 }
 
-factory.register('cnd', () => new CndProvider(new PlaywrightBrowserService({ headless: false }), logger));
+factory.register('cnd', () => new CndProvider(new PlaywrightBrowserService(), logger));
 
 factory.register('aluguel', () => new AluguelProvider(new PlaywrightBrowserService(), logger));
 

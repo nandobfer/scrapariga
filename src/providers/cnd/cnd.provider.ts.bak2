@@ -1,0 +1,178 @@
+/**
+ * cnd.provider.ts — Certidão Negativa de Débitos (Receita Federal).
+ *
+ * URL: https://servicos.receitafederal.gov.br/servico/certidoes/#/home/cnpj
+ *
+ * NOTA: O download automático não é possível pois o site utiliza auto-captcha
+ * que não pode ser bypassado de forma confiável. Por isso, este provider apenas
+ * abre o browser em modo headed, preenche o CNPJ e exibe um overlay com
+ * instruções para o usuário baixar a certidão manualmente.
+ *
+ * Flow (inside run()):
+ *   navigateAndFill()  → navigate, fill CNPJ (sem clicar em nenhum botão)
+ *   injectInstructions() → injeta overlay HTML com passos para download manual
+ *   waitForClose()     → aguarda o usuário fechar a janela do browser
+ *
+ * Selectors:
+ *   input[name="niContribuinte"]  → CNPJ input
+ */
+
+import type { Page } from 'playwright';
+import type { Logger } from 'pino';
+import { BaseScraper, type BrowserService } from '../base-scraper.js';
+import type { EnvCredential, ManualResult, ProgressCallback, ScraperResult } from '../interfaces.js';
+
+const CND_URL = 'https://servicos.receitafederal.gov.br/servico/certidoes/#/home/cnpj';
+
+/**
+ * Formats a raw CNPJ string to XX.XXX.XXX/XXXX-XX.
+ * Accepts 14-digit strings with or without mask. Returns the input unchanged if
+ * it does not consist of exactly 14 digits after stripping non-digits.
+ */
+function formatCnpj(raw: string): string {
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 14) {
+    return digits.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5');
+  }
+  return raw;
+}
+
+export class CndProvider extends BaseScraper {
+  readonly name = 'cnd';
+
+  readonly requiredCredentials: EnvCredential[] = [
+    {
+      key: 'CNPJ',
+      label: 'CNPJ da empresa',
+      description:
+        'Informe com ou sem máscara (ex: 12.345.678/0001-95 ou 12345678000195)',
+      sensitive: false,
+    },
+  ];
+
+  constructor(browserService: BrowserService, logger: Logger) {
+    super(browserService, logger);
+  }
+
+  // ─── run() ────────────────────────────────────────────────────────────────
+
+  async run(
+    credentials: Record<string, string>,
+    onProgress: ProgressCallback,
+  ): Promise<ScraperResult> {
+    this._progressCallback = onProgress;
+
+    const page = await this.browserService.newPage();
+
+    // Try to navigate and auto-fill; on failure, still keep the browser open
+    // so the user can interact manually.
+    let fillFailed = false;
+    try {
+      await this.navigateAndFill(page, credentials);
+    } catch (err) {
+      fillFailed = true;
+      this.logger.warn({ err }, 'CndProvider navigateAndFill failed — falling back to manual navigation');
+      // Best-effort: navigate to the URL so the user has something to work with
+      try {
+        await page.goto(CND_URL, { waitUntil: 'domcontentloaded', timeout: 15_000 });
+      } catch {
+        // ignore — user will have to navigate manually
+      }
+    }
+
+    const cnpj = formatCnpj(credentials['CNPJ'] ?? '');
+    await this.injectInstructions(page, cnpj, fillFailed);
+
+    this.emitStep({
+      stepId: 'manual',
+      label: 'Navegador aberto — siga as instruções na janela do browser',
+      status: 'warning',
+    });
+
+    this.logger.info('CndProvider waiting for user to close the browser manually');
+
+    // Wait indefinitely until the user closes the browser window
+    await page.waitForEvent('close', { timeout: 0 }).catch(() => undefined);
+
+    const result: ManualResult = {
+      type: 'manual',
+      message:
+        'O download da certidão não pôde ser automatizado (CAPTCHA da Receita Federal). ' +
+        'A certidão deve ter sido baixada manualmente pelo usuário. ' +
+        'Verifique sua pasta de downloads.',
+      url: CND_URL,
+    };
+
+    this.emitStep({ stepId: 'manual', label: 'Janela fechada — retornando ao menu', status: 'success' });
+    return result;
+  }
+
+  // ─── Step 1: Navigate and fill CNPJ (no button click) ────────────────────
+
+  protected async navigateAndFill(page: Page, credentials: Record<string, string>): Promise<void> {
+    this.emitStep({ stepId: 'login', label: 'Abrindo página da Receita Federal...', status: 'pending' });
+
+    await page.goto(CND_URL, { waitUntil: 'load' });
+
+    this.emitStep({ stepId: 'login', label: 'Preenchendo CNPJ...', status: 'pending' });
+
+    const cnpj = formatCnpj(credentials['CNPJ'] ?? '');
+    const input = page.locator('input[name="niContribuinte"]');
+    await input.waitFor({ state: 'visible', timeout: 15_000 });
+    await input.fill(cnpj);
+
+    this.emitStep({ stepId: 'login', label: 'CNPJ preenchido', status: 'success' });
+  }
+
+  // ─── Step 2: Inject floating overlay with manual instructions ────────────
+
+  private async injectInstructions(page: Page, cnpj: string, fillFailed = false): Promise<void> {
+    await page.evaluate(({ formattedCnpj, autoFilled }: { formattedCnpj: string; autoFilled: boolean }) => {
+      const div = document.createElement('div');
+      div.id = 'scrapariga-overlay';
+      div.style.cssText = [
+        'position: fixed',
+        'top: 20px',
+        'right: 20px',
+        'z-index: 2147483647',
+        'background: #0f172a',
+        'color: #f1f5f9',
+        'padding: 20px 24px',
+        'border-radius: 10px',
+        'font-family: monospace',
+        'font-size: 13px',
+        'max-width: 360px',
+        'border: 2px solid #f59e0b',
+        'box-shadow: 0 8px 32px rgba(0,0,0,0.6)',
+        'line-height: 1.6',
+      ].join('; ');
+
+      const cnpjStep = autoFilled
+        ? ''
+        : `<li>Preencha o CNPJ: <strong style="color:#f1f5f9">${formattedCnpj}</strong></li>`;
+
+      div.innerHTML = `
+        <div style="font-size:15px; font-weight:bold; color:#f59e0b; margin-bottom:10px;">
+          🤖 SCRAPARIGA — Download Manual
+        </div>
+        <div style="color:#fbbf24; margin-bottom:8px;">
+          ⚠️ Download automático indisponível<br>
+          <span style="color:#94a3b8; font-size:12px;">(auto-captcha da Receita Federal)</span>
+        </div>
+        <div style="margin-bottom:6px; color:#cbd5e1; font-weight:bold;">Como baixar a certidão:</div>
+        <ol style="margin:0; padding-left:18px; color:#e2e8f0;">
+          ${cnpjStep}
+          <li>Resolva o CAPTCHA na página</li>
+          <li>Clique em <strong style="color:#f1f5f9">"Consultar Certidão"</strong></li>
+          <li>Clique em <strong style="color:#f1f5f9">"Segunda via"</strong> para baixar o PDF</li>
+          <li><strong style="color:#f59e0b">Feche esta aba</strong> quando terminar</li>
+        </ol>
+        <div style="margin-top:10px; color:#64748b; font-size:11px;">
+          CNPJ: ${formattedCnpj}
+        </div>
+      `;
+
+      document.body.appendChild(div);
+    }, { formattedCnpj: cnpj, autoFilled: !fillFailed });
+  }
+}
