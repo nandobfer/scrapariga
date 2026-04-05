@@ -37,6 +37,7 @@ describe('CndProvider', () => {
   });
 
   it('returns ManualResult with the CND URL', async () => {
+    vi.spyOn(provider as object, 'copyTextToClipboard' as never).mockResolvedValue({ copied: true });
     const result = await provider.run({ CNPJ: '12345678000195' }, vi.fn());
     expect(result.type).toBe('manual');
     if (result.type === 'manual') {
@@ -45,6 +46,7 @@ describe('CndProvider', () => {
   });
 
   it('formats the CNPJ in the result message', async () => {
+    vi.spyOn(provider as object, 'copyTextToClipboard' as never).mockResolvedValue({ copied: true });
     const result = await provider.run({ CNPJ: '12345678000195' }, vi.fn());
     expect(result.type).toBe('manual');
     if (result.type === 'manual') {
@@ -52,7 +54,31 @@ describe('CndProvider', () => {
     }
   });
 
+  it('mentions clipboard copy success in the result message', async () => {
+    vi.spyOn(provider as object, 'copyTextToClipboard' as never).mockResolvedValue({ copied: true });
+
+    const result = await provider.run({ CNPJ: '12345678000195' }, vi.fn());
+
+    expect(result.type).toBe('manual');
+    if (result.type === 'manual') {
+      expect(result.message).toContain('copiado para a sua area de transferencia');
+    }
+  });
+
+  it('mentions clipboard fallback when copy fails', async () => {
+    vi.spyOn(provider as object, 'copyTextToClipboard' as never).mockResolvedValue({ copied: false });
+
+    const result = await provider.run({ CNPJ: '12345678000195' }, vi.fn());
+
+    expect(result.type).toBe('manual');
+    if (result.type === 'manual') {
+      expect(result.message).toContain('Nao foi possivel copiar o CNPJ automaticamente');
+      expect(result.message).toContain('12.345.678/0001-95');
+    }
+  });
+
   it('does not open a browser', async () => {
+    vi.spyOn(provider as object, 'copyTextToClipboard' as never).mockResolvedValue({ copied: true });
     await provider.run({ CNPJ: '12345678000195' }, vi.fn());
     expect(mockBrowserService.newPage).not.toHaveBeenCalled();
   });
