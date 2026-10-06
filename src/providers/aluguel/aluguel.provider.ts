@@ -43,9 +43,23 @@ interface BoletoResponse {
   data?: Array<{
     linha_digitavel?: string;
     valor_boleto?: string;
+    valor_desconto?: string;
+    aplicar_descontos?: boolean;
     data_vencimento?: string;
     fileurl?: string;
   }>;
+}
+
+/**
+ * Parse a money string from the portal to cents. The portal mixes formats:
+ * `valor_boleto` is pt-BR ("3.132,56") while `valor_desconto` is en-US ("562.50").
+ */
+function parseMoneyToCents(value: string | undefined): number {
+  if (!value) return 0;
+  const raw = value.trim();
+  const normalized = raw.includes(',') ? raw.replace(/\./g, '').replace(',', '.') : raw;
+  const parsed = parseFloat(normalized);
+  return Number.isFinite(parsed) ? Math.round(parsed * 100) : 0;
 }
 
 // Reference anchor — both known PIDs must satisfy: REFERENCE_PID + offset == pid for that month.
@@ -238,10 +252,16 @@ export class AluguelProvider extends BaseScraper {
       throw new Error('URL do PDF do boleto não retornada pelo portal');
     }
 
-    // valor_boleto: "3132,56" → 313256 cents
-    const amountCents = data.valor_boleto
-      ? Math.round(parseFloat(data.valor_boleto.replace(/\./g, '').replace(',', '.')) * 100)
-      : 0;
+    // Face value minus the early-payment discount (when the portal applies it).
+    // valor_boleto "3132,56" (pt-BR) vs valor_desconto "562.50" (en-US).
+    const grossCents = parseMoneyToCents(data.valor_boleto);
+    const discountCents = data.aplicar_descontos ? parseMoneyToCents(data.valor_desconto) : 0;
+    const amountCents = grossCents - discountCents;
+
+    this.logger.info(
+      { grossCents, discountCents, amountCents, aplicarDescontos: data.aplicar_descontos },
+      'Aluguel amount computed',
+    );
 
     this.emitStep({ stepId: 'fetch', label: 'Dados do boleto obtidos', status: 'success' });
 

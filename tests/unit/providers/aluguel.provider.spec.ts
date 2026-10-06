@@ -271,6 +271,8 @@ describe('AluguelProvider', () => {
             {
               linha_digitavel: '34191.09503 00557.633831 64000.550000 1 15980000313256',
               valor_boleto: '3132,56',
+              valor_desconto: '562.50',
+              aplicar_descontos: true,
               data_vencimento: '13/10/2026',
               fileurl: 'https://anticoimoveis.com.br/tmp/x.pdf',
             },
@@ -286,9 +288,31 @@ describe('AluguelProvider', () => {
         { form: { 'cid[]': '34856' } },
       );
       expect(data.boletoCode).toBe('34191.09503 00557.633831 64000.550000 1 15980000313256');
-      expect(data.amountCents).toBe(313256); // R$ 3.132,56
+      // R$ 3.132,56 − R$ 562,50 (desconto até o vencimento) = R$ 2.570,06
+      expect(data.amountCents).toBe(257006);
       expect(data.dueDate).toBe('13-10-2026'); // DD/MM/YYYY → DD-MM-YYYY
       expect(data.fileUrl).toBe('https://anticoimoveis.com.br/tmp/x.pdf');
+    });
+
+    it('does not deduct the discount when aplicar_descontos is false', async () => {
+      const post = vi.fn().mockResolvedValue({
+        json: vi.fn().mockResolvedValue({
+          success: true,
+          data: [
+            {
+              valor_boleto: '3132,56',
+              valor_desconto: '562.50',
+              aplicar_descontos: false,
+              fileurl: 'https://anticoimoveis.com.br/tmp/x.pdf',
+            },
+          ],
+        }),
+      });
+      const mockPage = { request: { post } } as unknown as Page;
+
+      const data = await provider.readBoletoData(mockPage, 34856);
+
+      expect(data.amountCents).toBe(313256); // sem desconto
     });
 
     it('throws when the portal response has no boleto data', async () => {
