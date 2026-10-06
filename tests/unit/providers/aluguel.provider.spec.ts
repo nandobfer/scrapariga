@@ -263,84 +263,46 @@ describe('AluguelProvider', () => {
   // ─── readBoletoData() ─────────────────────────────────────────────────────
 
   describe('readBoletoData()', () => {
-    it('registers a dialog listener before clicking the barcode button', async () => {
-      const onceSpy = vi.fn();
+    it('generates the boleto via the imprimir endpoint and maps the response', async () => {
+      const post = vi.fn().mockResolvedValue({
+        json: vi.fn().mockResolvedValue({
+          success: true,
+          data: [
+            {
+              linha_digitavel: '34191.09503 00557.633831 64000.550000 1 15980000313256',
+              valor_boleto: '3132,56',
+              data_vencimento: '13/10/2026',
+              fileurl: 'https://anticoimoveis.com.br/tmp/x.pdf',
+            },
+          ],
+        }),
+      });
+      const mockPage = { request: { post } } as unknown as Page;
 
-      const mockPage = {
-        locator: vi.fn().mockReturnValue(makeLocatorStub()),
-        waitForSelector: vi.fn().mockResolvedValue(undefined),
-        once: onceSpy,
-      };
+      const data = await provider.readBoletoData(mockPage, 34856);
 
-      // We don't await because the dialog never fires — just check ordering
-      void provider.readBoletoData(mockPage as unknown as Page).catch(() => undefined);
-
-      expect(onceSpy).toHaveBeenCalledWith('dialog', expect.any(Function));
+      expect(post).toHaveBeenCalledWith(
+        expect.stringContaining('task=finangerarcobrancas.imprimir'),
+        { form: { 'cid[]': '34856' } },
+      );
+      expect(data.boletoCode).toBe('34191.09503 00557.633831 64000.550000 1 15980000313256');
+      expect(data.amountCents).toBe(313256); // R$ 3.132,56
+      expect(data.dueDate).toBe('13-10-2026'); // DD/MM/YYYY → DD-MM-YYYY
+      expect(data.fileUrl).toBe('https://anticoimoveis.com.br/tmp/x.pdf');
     });
 
-    it('returns boletoCode, amountCents, and dueDate', async () => {
-      let dialogHandler: ((d: unknown) => void) | null = null;
-
-      const mockDialog = {
-        message: () => 'Linha digitavel copiada: 34191095030050798383164',
-        accept: vi.fn().mockResolvedValue(undefined),
-      };
-
-      const rowLocator = makeLocatorStub({
-        textContent: vi.fn().mockResolvedValue(
-          'Locacao: Contrato - 1230103 10-04-2026 2.496,69  0,00',
-        ),
-      });
-
+    it('throws when the portal response has no boleto data', async () => {
       const mockPage = {
-        locator: vi.fn().mockImplementation((sel: string) => {
-          if (sel.includes('tbody tr')) return rowLocator;
-          return makeLocatorStub();
-        }),
-        waitForSelector: vi.fn().mockResolvedValue(undefined),
-        once: vi.fn().mockImplementation((event: string, handler: (d: unknown) => void) => {
-          if (event === 'dialog') dialogHandler = handler;
-        }),
-      };
+        request: {
+          post: vi.fn().mockResolvedValue({
+            json: vi.fn().mockResolvedValue({ success: false, data: [] }),
+          }),
+        },
+      } as unknown as Page;
 
-      const fetchPromise = provider.readBoletoData(mockPage as unknown as Page);
-      if (dialogHandler) await (dialogHandler as (d: unknown) => Promise<void>)(mockDialog);
-      const data = await fetchPromise;
-
-      expect(data.boletoCode).toBe('34191095030050798383164');
-      expect(data.dueDate).toBe('10-04-2026');
-      expect(data.amountCents).toBe(249669);
-    });
-
-    it('extracts the barcode from the dialog message', async () => {
-      const expectedBarcode = '34191095030050798383164000550000414120000305919';
-      let dialogHandler: ((d: unknown) => void) | null = null;
-
-      const mockDialog = {
-        message: () => `Linha digitavel copiada: ${expectedBarcode}`,
-        accept: vi.fn().mockResolvedValue(undefined),
-      };
-
-      const rowLocator = makeLocatorStub({
-        textContent: vi.fn().mockResolvedValue('1230103 10-04-2026 3.059,19  0,00'),
-      });
-
-      const mockPage = {
-        locator: vi.fn().mockImplementation((sel: string) => {
-          if (sel.includes('tbody tr')) return rowLocator;
-          return makeLocatorStub();
-        }),
-        waitForSelector: vi.fn().mockResolvedValue(undefined),
-        once: vi.fn().mockImplementation((event: string, handler: (d: unknown) => void) => {
-          if (event === 'dialog') dialogHandler = handler;
-        }),
-      };
-
-      const fetchPromise = provider.readBoletoData(mockPage as unknown as Page);
-      if (dialogHandler) await (dialogHandler as (d: unknown) => Promise<void>)(mockDialog);
-      const data = await fetchPromise;
-
-      expect(data.boletoCode).toBe(expectedBarcode);
+      await expect(provider.readBoletoData(mockPage, 34856)).rejects.toThrow(
+        'Falha ao gerar o boleto no portal',
+      );
     });
   });
 });

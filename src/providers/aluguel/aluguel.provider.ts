@@ -14,15 +14,14 @@
  *
  * Flow (inside run()):
  *   findPendingBoleto() → probe PIDs until unpaid boleto found
- *   readBoletoData()    → capture linha digitável via dialog, read value + due date
- *   fetchPdf()          → click "Imprimir boleto", wait for link, download PDF
+ *   readBoletoData()    → POST finangerarcobrancas.imprimir → linha digitável, valor, vencimento, PDF URL
+ *   fetchPdf()          → download the PDF fileurl returned by the portal
  *
- * Selectors (confirmed via browser DevTools on anticoimoveis.com.br):
- *   #dropdownMenuButton                          → AÇÕES dropdown toggle
- *   .ld                                          → Copiar linha digitável
- *   [grid-data-action="print"]                   → Imprimir boleto
- *   #downloadfile                                → Download link popover
- *   .table tbody tr:first-child td               → Table row cells
+ * Endpoints / selectors (confirmed via browser DevTools on anticoimoveis.com.br):
+ *   #dropdownMenuButton                                       → AÇÕES dropdown toggle (existence check)
+ *   input[name="parcela_id"] (hidden row input)               → boleto/parcela id (== PID)
+ *   POST task=finangerarcobrancas.imprimir (cid[]=<parcela>)  → boleto JSON (linha_digitavel, fileurl, …)
+ *   .table tbody tr td                                        → Table row cells
  */
 
 import path from 'node:path';
@@ -32,9 +31,22 @@ import { BaseScraper, type BrowserService } from '../base-scraper.js';
 import type { EnvCredential, ProgressCallback, ScraperResult } from '../interfaces.js';
 
 const BASE_URL = 'https://anticoimoveis.com.br/cobrancas';
+const IMPRIMIR_URL =
+  'https://anticoimoveis.com.br/index.php?option=com_widesys&task=finangerarcobrancas.imprimir&format=raw&tmpl=component';
 const EXPECTED_CONTRACT = '1230103';
 const MAX_PID_PROBE = 6;
 const ALLOWED_MIMES = ['application/pdf'];
+
+/** Subset of the `finangerarcobrancas.imprimir` JSON response we rely on. */
+interface BoletoResponse {
+  success?: boolean;
+  data?: Array<{
+    linha_digitavel?: string;
+    valor_boleto?: string;
+    data_vencimento?: string;
+    fileurl?: string;
+  }>;
+}
 
 // Reference anchor — both known PIDs must satisfy: REFERENCE_PID + offset == pid for that month.
 const REFERENCE_PID = 34849;    // boleto para março 2026
@@ -71,7 +83,7 @@ export class AluguelProvider extends BaseScraper {
     const page = await this.browserService.newPage(sessionState);
 
     try {
-      const pid = await this.retry(
+      const parcela = await this.retry(
         () => this.findPendingBoleto(page),
         {
           maxAttempts: 2,
@@ -85,8 +97,8 @@ export class AluguelProvider extends BaseScraper {
 
       await this.debugShot(page, 'boleto-found');
 
-      const { boletoCode, amountCents, dueDate } = await this.retry(
-        () => this.readBoletoData(page),
+      const { boletoCode, amountCents, dueDate, fileUrl } = await this.retry(
+        () => this.readBoletoData(page, parcela),
         {
           maxAttempts: 2,
           baseDelayMs: 1000,
@@ -100,7 +112,7 @@ export class AluguelProvider extends BaseScraper {
       const finalPath = this.buildFilePath('boleto-aluguel', 'pdf');
 
       const { mimeType, sizeBytes } = await this.retry(
-        () => this.fetchPdf(page, finalPath),
+        () => this.fetchPdf(fileUrl, finalPath),
         {
           maxAttempts: 3,
           baseDelayMs: 2000,
@@ -204,69 +216,49 @@ export class AluguelProvider extends BaseScraper {
 
   // ─── Step 2: Read boleto data (linha digitável, value, due date) ──────────
 
-  async readBoletoData(page: Page): Promise<{ boletoCode: string; amountCents: number; dueDate: string }> {
+  async readBoletoData(
+    page: Page,
+    parcela: number,
+  ): Promise<{ boletoCode: string; amountCents: number; dueDate: string; fileUrl: string }> {
     this.emitStep({ stepId: 'fetch', label: 'Lendo dados do boleto...', status: 'pending' });
 
-    // Register BEFORE any await — guarantee the listener is in place before
-    // the button click triggers window.alert synchronously.
-    const barcodeCapture = new Promise<string>((resolve) => {
-      page.once('dialog', async (dialog) => {
-        const msg = dialog.message();
-        await dialog.accept();
-        // Message format: "Linha digitável copiada: 34191095030050798383..."
-        const afterColon = msg.split('copiada:')[1]?.trim() ?? msg.trim();
-        resolve(afterColon);
-      });
+    // The AÇÕES dropdown no longer exposes a "copiar linha digitável" item, so
+    // the boleto is generated through the portal's own AJAX call
+    // (cid[]=<parcela>). page.request shares the page context's session cookies.
+    const response = await page.request.post(IMPRIMIR_URL, {
+      form: { 'cid[]': String(parcela) },
     });
+    const json = (await response.json()) as BoletoResponse;
+    const data = json.data?.[0];
 
-    const row = page.locator('.table tbody tr').first();
-    const rowText = await row.textContent({ timeout: 10_000 }).catch(() => '');
+    if (!json.success || !data) {
+      throw new Error('Falha ao gerar o boleto no portal (resposta sem sucesso)');
+    }
+    if (!data.fileurl) {
+      throw new Error('URL do PDF do boleto não retornada pelo portal');
+    }
 
-    const dateMatch = rowText?.match(/\d{2}-\d{2}-\d{4}/);
-    const dueDate = dateMatch?.[0] ?? '';
-
-    const valueMatches = rowText?.match(/\d{1,3}(?:\.\d{3})*,\d{2}/g) ?? [];
-    const parsedValues = valueMatches
-      .map((v) => parseFloat(v.replace(/\./g, '').replace(',', '.')))
-      .filter((v) => v > 0);
-    const amountCents = parsedValues.length > 0 ? Math.round(Math.max(...parsedValues) * 100) : 0;
-
-    await page.locator('#dropdownMenuButton').click();
-    await page.waitForSelector('.dropdown-menu .ld', { state: 'visible', timeout: 5_000 });
-    await page.locator('.ld').first().click();
-
-    const boletoCode = await barcodeCapture;
+    // valor_boleto: "3132,56" → 313256 cents
+    const amountCents = data.valor_boleto
+      ? Math.round(parseFloat(data.valor_boleto.replace(/\./g, '').replace(',', '.')) * 100)
+      : 0;
 
     this.emitStep({ stepId: 'fetch', label: 'Dados do boleto obtidos', status: 'success' });
 
-    return { boletoCode, amountCents, dueDate };
+    return {
+      boletoCode: (data.linha_digitavel ?? '').trim(),
+      amountCents,
+      // Portal returns DD/MM/YYYY; the BoletoResult contract uses DD-MM-YYYY.
+      dueDate: (data.data_vencimento ?? '').trim().replace(/\//g, '-'),
+      fileUrl: data.fileurl,
+    };
   }
 
   // ─── Step 3: Click "Imprimir boleto", download PDF ────────────────────────
 
-  async fetchPdf(page: Page, finalPath: string): Promise<{ mimeType: string; sizeBytes: number }> {
-    this.emitStep({ stepId: 'download', label: 'Gerando boleto para download...', status: 'pending' });
-
-    await page.locator('#dropdownMenuButton').click();
-    await page.waitForSelector('.dropdown-menu [grid-data-action="print"]', {
-      state: 'visible',
-      timeout: 5_000,
-    });
-    await page.locator('[grid-data-action="print"]').click();
-
-    this.emitStep({ stepId: 'download', label: 'Aguardando link do boleto...', status: 'pending' });
-
-    // On retries the old link may still be in the DOM — use .last() to always
-    // pick the most recently generated one.
-    await page.waitForSelector('#downloadfile', { state: 'visible', timeout: 45_000 });
-    const href = await page.locator('#downloadfile').last().getAttribute('href');
-    if (!href) throw new Error('Link de download do boleto não encontrado no popover');
-
-    await this.debugShot(page, 'download-link-ready');
-
-    this.emitStep({ stepId: 'download', label: 'Baixando PDF...', status: 'pending' });
-
-    return this.downloadFile(href, finalPath, ALLOWED_MIMES);
+  async fetchPdf(fileUrl: string, finalPath: string): Promise<{ mimeType: string; sizeBytes: number }> {
+    this.emitStep({ stepId: 'download', label: 'Baixando boleto...', status: 'pending' });
+    return this.downloadFile(fileUrl, finalPath, ALLOWED_MIMES);
   }
 }
 
