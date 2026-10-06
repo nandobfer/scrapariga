@@ -20,9 +20,10 @@
  *   #formSegundaViaFatura:dtListaSegundaViaFaturaDebitoPendente → Pending bills table
  *   a:has-text("2 via")                                         → Bill detail links
  *   #frmModalSegundaVia:olPixCode                               → PIX code (modal)
- *   #frmModalSegundaVia:j_idt170                                → Amount (modal)
- *   #frmModalSegundaVia:j_idt166                                → Due date (modal)
- *   #frmModalSegundaVia:j_idt154                                → Download button (modal)
+ *   modal label "Valor (R$):"                                    → Amount (modal)
+ *   modal label "Vencimento:"                                    → Due date (modal)
+ *   button "Fazer download da 2ª via"                            → Download button (modal)
+ *                                                                  (JSF id j_idt### is unstable)
  */
 
 import path from 'node:path';
@@ -304,7 +305,7 @@ export class CopelProvider extends BaseScraper {
     await links[billIndex].click();
 
     // Wait for modal to open — wait for PIX code element or download button
-    await page.waitForSelector('#frmModalSegundaVia\\:olPixCode, #frmModalSegundaVia\\:j_idt154', {
+    await page.waitForSelector('#frmModalSegundaVia\\:olPixCode, #frmModalSegundaVia\\:j_idt157', {
       timeout: 30_000,
     });
 
@@ -330,27 +331,22 @@ export class CopelProvider extends BaseScraper {
       throw new Error('Código PIX não encontrado ou inválido no modal');
     }
 
-    // Extract amount
-    const amountText = (
-      await page
-        .locator('#frmModalSegundaVia\\:j_idt170')
-        .textContent({ timeout: 5_000 })
-        .catch(() => '')
-    )?.trim() ?? '';
+    // Read the modal text once and parse amount/due date by label. The JSF
+    // auto-generated ids (j_idt###) for these fields change between deployments,
+    // so matching the visible labels is the stable approach.
+    const modalText = await page
+      .locator('#frmModalSegundaVia')
+      .innerText({ timeout: 10_000 })
+      .catch(() => '');
 
-    // Parse amount: "198,12" → 19812 cents
-    const amountMatch = amountText.match(/[\d.]+,\d{2}/);
-    const amountCents = amountMatch
-      ? Math.round(parseFloat(amountMatch[0].replace(/\./g, '').replace(',', '.')) * 100)
+    // Amount from "Valor (R$):139,38" → 13938 cents
+    const amountRaw = modalText.match(/Valor\s*\(R\$\):\s*([\d.]+,\d{2})/)?.[1] ?? '';
+    const amountCents = amountRaw
+      ? Math.round(parseFloat(amountRaw.replace(/\./g, '').replace(',', '.')) * 100)
       : 0;
 
-    // Extract due date
-    const dueDate = (
-      await page
-        .locator('#frmModalSegundaVia\\:j_idt166')
-        .textContent({ timeout: 5_000 })
-        .catch(() => '')
-    )?.trim() ?? '';
+    // Due date from "Vencimento:10/10/2026"
+    const dueDate = modalText.match(/Vencimento:\s*(\d{2}\/\d{2}\/\d{4})/)?.[1]?.trim() ?? '';
 
     this.emitStep({ stepId: 'extract', label: 'Dados extraídos', status: 'success' });
 
@@ -367,9 +363,19 @@ export class CopelProvider extends BaseScraper {
 
     // Set up download event listener before clicking
     const downloadPromise = page.waitForEvent('download', { timeout: 45_000 });
+    // If the click below fails and the caller retries, this promise is orphaned;
+    // its timeout rejection would otherwise surface later as an unhandled
+    // rejection and crash the whole process. Swallow that stray rejection — the
+    // awaited copy below still propagates the real error.
+    downloadPromise.catch(() => undefined);
 
-    // Click download button
-    await page.locator('#frmModalSegundaVia\\:j_idt154').click();
+    // Click download button. The JSF id (j_idt###) changes between portal
+    // deployments, so match by its visible label first, then fall back to ids.
+    await page
+      .getByRole('button', { name: /fazer download/i })
+      .or(page.locator('#frmModalSegundaVia\\:j_idt157, #frmModalSegundaVia\\:j_idt154'))
+      .first()
+      .click();
 
     this.emitStep({ stepId: 'download', label: 'Aguardando download...', status: 'pending' });
 

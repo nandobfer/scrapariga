@@ -288,12 +288,14 @@ describe('CondominioProvider', () => {
 
   describe('extractBoletoCode()', () => {
     it('returns the value from textarea.text', async () => {
-      const textareaStub = makeLocatorStub({
-        inputValue: vi.fn().mockResolvedValue('48190.00003 00000.000000 00000.000000 0 00000000000000'),
-      });
       const mockPage = {
-        locator: vi.fn().mockReturnValue(textareaStub),
-        waitForSelector: vi.fn().mockResolvedValue(undefined),
+        locator: vi.fn().mockReturnValue(makeLocatorStub()),
+        // The boleto code is read via waitForFunction once the view has swapped.
+        waitForFunction: vi.fn().mockResolvedValue({
+          jsonValue: vi
+            .fn()
+            .mockResolvedValue('48190.00003 00000.000000 00000.000000 0 00000000000000'),
+        }),
       } as unknown as Page;
 
       const code = await provider.extractBoletoCode(mockPage);
@@ -305,15 +307,14 @@ describe('CondominioProvider', () => {
       const radioStub = makeLocatorStub({
         click: vi.fn().mockResolvedValue(undefined),
       });
-      const textareaStub = makeLocatorStub({
-        inputValue: vi.fn().mockResolvedValue('12345'),
-      });
       const mockPage = {
         locator: vi.fn().mockImplementation((sel: string) => {
           if (sel === '#parcela-0') return radioStub;
-          return textareaStub;
+          return makeLocatorStub();
         }),
-        waitForSelector: vi.fn().mockResolvedValue(undefined),
+        waitForFunction: vi.fn().mockResolvedValue({
+          jsonValue: vi.fn().mockResolvedValue('12345'),
+        }),
       } as unknown as Page;
 
       await provider.extractBoletoCode(mockPage);

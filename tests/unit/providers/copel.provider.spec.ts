@@ -26,6 +26,8 @@ function makeLocatorStub(overrides: Record<string, unknown> = {}): Record<string
     click: vi.fn().mockResolvedValue(undefined),
     isVisible: vi.fn().mockResolvedValue(false),
     textContent: vi.fn().mockResolvedValue(''),
+    innerText: vi.fn().mockResolvedValue(''),
+    first: vi.fn().mockReturnThis(),
     or: vi.fn().mockReturnThis(),
     all: vi.fn().mockResolvedValue([]),
     locator: vi.fn().mockReturnThis(),
@@ -299,18 +301,18 @@ describe('CopelProvider', () => {
             '00020126510014BR.GOV.BCB.PIX01290111_copeldis_arrec@copel.com5204000053039865406198.125802BR',
           ),
       });
-      const amountLocator = makeLocatorStub({
-        textContent: vi.fn().mockResolvedValue('198,12'),
-      });
-      const dueDateLocator = makeLocatorStub({
-        textContent: vi.fn().mockResolvedValue('10/04/2026'),
+      // Amount and due date are parsed from the modal text by label, since the
+      // JSF ids for those fields are unstable.
+      const modalLocator = makeLocatorStub({
+        innerText: vi
+          .fn()
+          .mockResolvedValue('Unidade consumidora ANEEL:123\nVencimento:10/04/2026\nValor (R$):198,12'),
       });
 
       const mockPage = {
         locator: vi.fn().mockImplementation((sel: string) => {
           if (sel === '#frmModalSegundaVia\\:olPixCode') return pixCodeLocator;
-          if (sel === '#frmModalSegundaVia\\:j_idt170') return amountLocator;
-          if (sel === '#frmModalSegundaVia\\:j_idt166') return dueDateLocator;
+          if (sel === '#frmModalSegundaVia') return modalLocator;
           return makeLocatorStub();
         }),
       } as unknown as Page;
@@ -328,7 +330,10 @@ describe('CopelProvider', () => {
       });
 
       const mockPage = {
-        locator: vi.fn().mockReturnValue(pixCodeLocator),
+        locator: vi.fn().mockImplementation((sel: string) => {
+          if (sel === '#frmModalSegundaVia\\:olPixCode') return pixCodeLocator;
+          return makeLocatorStub({ innerText: vi.fn().mockResolvedValue('') });
+        }),
       } as unknown as Page;
 
       await expect(provider.extractBillData(mockPage)).rejects.toThrow(
@@ -340,18 +345,14 @@ describe('CopelProvider', () => {
       const pixCodeLocator = makeLocatorStub({
         textContent: vi.fn().mockResolvedValue('00020126510014BR.GOV.BCB.PIX'),
       });
-      const amountLocator = makeLocatorStub({
-        textContent: vi.fn().mockResolvedValue('1.234,56'), // R$ 1.234,56
-      });
-      const dueDateLocator = makeLocatorStub({
-        textContent: vi.fn().mockResolvedValue('10/04/2026'),
+      const modalLocator = makeLocatorStub({
+        innerText: vi.fn().mockResolvedValue('Vencimento:10/04/2026\nValor (R$):1.234,56'), // R$ 1.234,56
       });
 
       const mockPage = {
         locator: vi.fn().mockImplementation((sel: string) => {
           if (sel === '#frmModalSegundaVia\\:olPixCode') return pixCodeLocator;
-          if (sel === '#frmModalSegundaVia\\:j_idt170') return amountLocator;
-          if (sel === '#frmModalSegundaVia\\:j_idt166') return dueDateLocator;
+          if (sel === '#frmModalSegundaVia') return modalLocator;
           return makeLocatorStub();
         }),
       } as unknown as Page;
@@ -370,9 +371,10 @@ describe('CopelProvider', () => {
         saveAs: vi.fn().mockResolvedValue(undefined),
       };
 
-      const downloadBtn = makeLocatorStub();
+      const downloadBtn = makeLocatorStub({ first: vi.fn().mockReturnThis() });
 
       const mockPage = {
+        getByRole: vi.fn().mockReturnValue(downloadBtn),
         locator: vi.fn().mockReturnValue(downloadBtn),
         waitForEvent: vi.fn().mockResolvedValue(mockDownload),
       } as unknown as Page;

@@ -334,13 +334,30 @@ export class CondominioProvider extends BaseScraper {
   async extractBoletoCode(page: Page): Promise<string> {
     this.emitStep({ stepId: 'fetch', label: 'Obtendo linha digitável...', status: 'pending' });
 
-    // Clicking parcela-0 reveals the barcode textarea and the Imprimir button
+    // Clicking parcela-0 reveals the barcode textarea and the Imprimir button.
     await page.locator('#parcela-0').click();
-    await page.waitForSelector('textarea.text', { state: 'visible', timeout: 10_000 });
 
-    const boletoCode = (await page.locator('textarea.text').inputValue().catch(() => '')).trim();
+    // The view swap is async and the PIX textarea (also class .text) can still be
+    // the visible/empty one at first — wait until a .text textarea carries the code.
+    const boletoCode = String(
+      await page
+        .waitForFunction(
+          `(() => {
+            const el = Array.from(document.querySelectorAll('textarea.text')).find((t) => (t.value || '').trim().length > 0);
+            return el ? el.value.trim() : false;
+          })()`,
+          undefined,
+          { timeout: 15_000 },
+        )
+        .then((handle) => handle.jsonValue())
+        .catch(() => ''),
+    ).trim();
 
-    this.emitStep({ stepId: 'fetch', label: 'Linha digitável obtida', status: 'success' });
+    this.emitStep({
+      stepId: 'fetch',
+      label: boletoCode ? 'Linha digitável obtida' : 'Linha digitável não encontrada',
+      status: boletoCode ? 'success' : 'warning',
+    });
 
     return boletoCode;
   }
