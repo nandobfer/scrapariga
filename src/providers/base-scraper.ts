@@ -18,6 +18,9 @@
 
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import https from 'node:https';
+import tls from 'node:tls';
 import { spawn, execFile } from 'node:child_process';
 import axios from 'axios';
 import { fileTypeFromBuffer } from 'file-type';
@@ -30,6 +33,52 @@ import type {
   RetryOptions,
   ScraperResult,
 } from './interfaces.js';
+
+// ---------------------------------------------------------------------------
+// HTTPS agent (corporate TLS-inspection support)
+// ---------------------------------------------------------------------------
+
+/**
+ * Node/axios use their own bundled root store and — unlike curl — ignore the OS
+ * trust store. Behind a corporate TLS-inspection proxy (e.g. FortiGate) that
+ * re-signs HTTPS with a CA installed only in the OS store, axios then fails with
+ * "unable to get local issuer certificate". Build an agent that also trusts the
+ * OS CA bundle (and NODE_EXTRA_CA_CERTS, if set) on top of Node's defaults.
+ */
+const SYSTEM_CA_BUNDLES = [
+  '/etc/ssl/certs/ca-certificates.crt', // Debian / Ubuntu
+  '/etc/pki/tls/certs/ca-bundle.crt', // RHEL / CentOS / Fedora
+  '/etc/ssl/cert.pem', // Alpine / misc
+];
+
+let cachedHttpsAgent: https.Agent | undefined;
+
+function getHttpsAgent(): https.Agent {
+  if (!cachedHttpsAgent) {
+    const ca: string[] = [...tls.rootCertificates];
+
+    for (const bundle of SYSTEM_CA_BUNDLES) {
+      try {
+        ca.push(readFileSync(bundle, 'utf8'));
+        break;
+      } catch {
+        // try the next known location
+      }
+    }
+
+    const extra = process.env['NODE_EXTRA_CA_CERTS'];
+    if (extra) {
+      try {
+        ca.push(readFileSync(extra, 'utf8'));
+      } catch {
+        // ignore unreadable extra CA
+      }
+    }
+
+    cachedHttpsAgent = new https.Agent({ ca });
+  }
+  return cachedHttpsAgent;
+}
 
 // ---------------------------------------------------------------------------
 // BrowserService interface
@@ -146,6 +195,7 @@ export abstract class BaseScraper {
     const response = await axios.get<ArrayBuffer>(url, {
       responseType: 'arraybuffer',
       timeout: 30_000,
+      httpsAgent: getHttpsAgent(),
     });
     const buffer = Buffer.from(response.data);
 

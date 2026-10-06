@@ -26,14 +26,26 @@ export interface BrowserService {
 
 export interface PlaywrightBrowserServiceOptions {
   headless?: boolean;
+  /**
+   * Accept invalid/self-signed TLS certificates. Required when a corporate
+   * TLS-inspection proxy (e.g. FortiGate MITM) re-signs HTTPS traffic with a CA
+   * that Chromium does not trust — otherwise every page.goto fails with
+   * `net::ERR_CERT_AUTHORITY_INVALID`.
+   *
+   * Defaults to true unless the env var PLAYWRIGHT_IGNORE_HTTPS_ERRORS=false.
+   */
+  ignoreHTTPSErrors?: boolean;
 }
 
 export class PlaywrightBrowserService implements BrowserService {
   private context: BrowserContext | null = null;
   private readonly headless: boolean;
+  private readonly ignoreHTTPSErrors: boolean;
 
   constructor(options: PlaywrightBrowserServiceOptions = {}) {
     this.headless = options.headless ?? true;
+    this.ignoreHTTPSErrors =
+      options.ignoreHTTPSErrors ?? process.env['PLAYWRIGHT_IGNORE_HTTPS_ERRORS'] !== 'false';
   }
 
   async newPage(storageState?: SessionState): Promise<Page> {
@@ -42,9 +54,10 @@ export class PlaywrightBrowserService implements BrowserService {
       this.context = null;
     }
     const browser = await chromium.launch({ headless: this.headless });
-    this.context = await browser.newContext(
-      storageState ? { storageState } : undefined,
-    );
+    this.context = await browser.newContext({
+      ignoreHTTPSErrors: this.ignoreHTTPSErrors,
+      ...(storageState ? { storageState } : {}),
+    });
     return this.context.newPage();
   }
 

@@ -19,8 +19,15 @@
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { chromium } from 'playwright';
+
+// `node_modules/.bin/playwright` is a shell shim, not JavaScript — invoking it
+// with `node` fails with a SyntaxError. Resolve the package's real CLI entry
+// instead (works across npm/pnpm/yarn since it follows the module resolution).
+const require = createRequire(import.meta.url);
+const playwrightCli = path.join(path.dirname(require.resolve('playwright')), 'cli.js');
 
 // ─── 1. Check / install Chromium binary ───────────────────────────────────
 
@@ -28,11 +35,9 @@ const execPath = chromium.executablePath();
 
 if (!fs.existsSync(execPath)) {
   console.log('Playwright Chromium not found. Downloading...\n');
-  const install = spawnSync(process.execPath, [
-    path.resolve('node_modules', '.bin', 'playwright'),
-    'install',
-    'chromium',
-  ], { stdio: 'inherit', shell: false });
+  const install = spawnSync(process.execPath, [playwrightCli, 'install', 'chromium'], {
+    stdio: 'inherit',
+  });
   if (install.status !== 0) {
     process.stderr.write('\n❌  playwright install chromium failed.\n');
     process.exit(install.status ?? 1);
@@ -68,15 +73,14 @@ console.log('\n  Installing via apt (sudo required)...\n');
 
 // Use absolute paths: sudo's restricted PATH doesn't include nvm/node binaries.
 const nodeBin = process.execPath;
-const playwrightBin = path.resolve('node_modules', '.bin', 'playwright');
 
-const deps = spawnSync('sudo', [nodeBin, playwrightBin, 'install-deps', 'chromium'], {
+const deps = spawnSync('sudo', [nodeBin, playwrightCli, 'install-deps', 'chromium'], {
   stdio: 'inherit', // sudo prompts directly on the TTY; no password capture needed
 });
 
 if (deps.status !== 0) {
   process.stderr.write('\n❌  Failed to install system dependencies.\n');
-  process.stderr.write(`    Try manually: sudo ${nodeBin} ${playwrightBin} install-deps chromium\n`);
+  process.stderr.write(`    Try manually: sudo ${nodeBin} ${playwrightCli} install-deps chromium\n`);
   process.exit(deps.status ?? 1);
 }
 
