@@ -153,6 +153,10 @@ export class ResultRenderer {
         term.gray(`   URL: ${result.url}\n`);
         break;
 
+      case 'message':
+        term.green(`✅ ${result.message}\n`);
+        break;
+
       case 'error':
         term.red(`❌ Erro: ${result.message}\n`);
         break;

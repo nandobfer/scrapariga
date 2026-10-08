@@ -29,6 +29,8 @@ import { AluguelProvider } from './providers/aluguel/aluguel.provider.js';
 import { CondominioProvider } from './providers/condominio/condominio.provider.js';
 import { CopelProvider } from './providers/copel/copel.provider.js';
 import { ComprovantePagamentoProvider } from './providers/comprovante-pagamento/comprovante-pagamento.provider.js';
+import { ZeevProvider } from './providers/zeev/zeev.provider.js';
+import { prepareZeevPaths } from './cli/prompts/zeev.prompt.js';
 import { PlaywrightBrowserService } from './core/browser.service.js';
 import type { ScraperResult } from './providers/interfaces.js';
 import terminal from 'terminal-kit';
@@ -79,11 +81,31 @@ factory.register(
   () => new ComprovantePagamentoProvider(new PlaywrightBrowserService(), logger),
 );
 
+// Zeev needs a headful browser by default so a first-time Microsoft MFA (if any)
+// can be completed manually; set ZEEV_HEADLESS=true to force headless.
+factory.register(
+  'zeev',
+  () =>
+    new ZeevProvider(
+      new PlaywrightBrowserService({ headless: process.env['ZEEV_HEADLESS'] === 'true' }),
+      logger,
+    ),
+);
+
 // ─── Execution helper ──────────────────────────────────────────────────────
 
 async function executeProvider(providerId: string): Promise<void> {
   const provider = factory.create(providerId);
   const credentials = await envService.promptMissing(provider.requiredCredentials);
+
+  // Zeev needs the NFS-e and CND paths, which are resolved (or prompted) here
+  // because they are per-execution values and must not be persisted to .env.
+  if (providerId === 'zeev') {
+    const paths = await prepareZeevPaths(credentials, logger);
+    if (!paths) return; // user cancelled
+    credentials['NFSE_PATH'] = paths.nfsePath;
+    credentials['CND_PATH'] = paths.cndPath;
+  }
 
   await progressRenderer.init([provider.name]);
 

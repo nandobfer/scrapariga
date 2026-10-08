@@ -106,6 +106,12 @@ export interface PaymentResult {
   dueDate?: string;
 }
 
+export interface MessageResult {
+  type: 'message';
+  /** Human-readable success message shown in the result renderer */
+  message: string;
+}
+
 export interface ErrorResult {
   type: 'error';
   message: string;
@@ -164,7 +170,7 @@ export interface CopelBillResult {
   sizeBytes: number;
 }
 
-export type ScraperResult = FileResult | PaymentResult | BoletoResult | CondoBoletoResult | CopelBillResult | ManualResult | ErrorResult;
+export type ScraperResult = FileResult | PaymentResult | BoletoResult | CondoBoletoResult | CopelBillResult | ManualResult | MessageResult | ErrorResult;
 
 // ---------------------------------------------------------------------------
 // Retry

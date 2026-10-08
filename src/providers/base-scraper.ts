@@ -86,6 +86,11 @@ function getHttpsAgent(): https.Agent {
 
 export interface BrowserService {
   newPage(storageState?: Awaited<ReturnType<BrowserContext['storageState']>>): Promise<Page>;
+  /**
+   * Open a page backed by a persistent Chromium profile (`userDataDir`).
+   * Optional so lightweight test doubles can omit it.
+   */
+  newPersistentPage?(userDataDir: string): Promise<Page>;
   close(): Promise<void>;
 }
 

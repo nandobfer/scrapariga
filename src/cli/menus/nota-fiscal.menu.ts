@@ -18,8 +18,9 @@ export interface SubMenuResult {
 const ITEMS = [
   '1  Certidão Negativa de Débitos (CND)',
   '2  Comprovante de Pagamento',
-  '3  Todos',
-  '4  Voltar',
+  '3  Submeter Zeev',
+  '4  Todos',
+  '5  Voltar',
 ];
 
 const PROVIDER_IDS = ['cnd', 'comprovante-pagamento'];
@@ -27,6 +28,7 @@ const PROVIDER_IDS = ['cnd', 'comprovante-pagamento'];
 const MAPPING: SubMenuResult[] = [
   { action: 'provider', providerId: 'cnd' },
   { action: 'provider', providerId: 'comprovante-pagamento' },
+  { action: 'provider', providerId: 'zeev' },
   { action: 'all', providerIds: PROVIDER_IDS },
   { action: 'back' },
 ];
@@ -52,7 +54,7 @@ export async function showNotaFiscalMenu(): Promise<SubMenuResult> {
       if (numberSelected) { term('\n'); resolve(numberSelected); return; }
       if (res.canceled) { term('\n'); process.exit(0); }
       resolve(MAPPING[res.selectedIndex]);
-    }) as { stop: (erase: boolean) => void };
+    }) as unknown as { stop: (erase: boolean) => void };
 
     term.on('key', keyHandler);
   });

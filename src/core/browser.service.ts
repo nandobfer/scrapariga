@@ -16,6 +16,12 @@ type SessionState = Awaited<ReturnType<BrowserContext['storageState']>>;
 export interface BrowserService {
   /** Open a new page, optionally restoring a previously saved session state */
   newPage(storageState?: SessionState): Promise<Page>;
+  /**
+   * Open a page backed by a persistent Chromium profile (`userDataDir`).
+   * Cookies / localStorage live on disk, so SSO sessions survive between runs.
+   * Optional so test doubles can omit it.
+   */
+  newPersistentPage?(userDataDir: string): Promise<Page>;
   /** Gracefully close the browser and all pages */
   close(): Promise<void>;
 }
@@ -59,6 +65,19 @@ export class PlaywrightBrowserService implements BrowserService {
       ...(storageState ? { storageState } : {}),
     });
     return this.context.newPage();
+  }
+
+  async newPersistentPage(userDataDir: string): Promise<Page> {
+    if (this.context) {
+      await this.context.close();
+      this.context = null;
+    }
+    this.context = await chromium.launchPersistentContext(userDataDir, {
+      ignoreHTTPSErrors: this.ignoreHTTPSErrors,
+      headless: this.headless,
+    });
+    const [existing] = this.context.pages();
+    return existing ?? this.context.newPage();
   }
 
   async close(): Promise<void> {

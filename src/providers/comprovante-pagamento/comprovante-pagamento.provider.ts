@@ -58,6 +58,26 @@ export class ComprovantePagamentoProvider extends BaseScraper {
     credentials: Record<string, string>,
     onProgress: ProgressCallback,
   ): Promise<ScraperResult> {
+    try {
+      const result = await this.fetchLatest(credentials, onProgress);
+      await this.openDocument(result.filePath);
+      return result;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error({ err }, 'ComprovantePagamentoProvider failed');
+      return { type: 'error', message, cause: err } satisfies ErrorResult;
+    }
+  }
+
+  /**
+   * Downloads the most recent payment receipt to `documents/comprovante-pagamento/`
+   * WITHOUT opening it. Reused by the Zeev provider to attach the receipt.
+   * Throws on failure (no ScraperResult wrapping).
+   */
+  async fetchLatest(
+    credentials: Record<string, string>,
+    onProgress: ProgressCallback,
+  ): Promise<FileResult> {
     let daemon: ChildProcess | null = null;
     let ownsDaemon = false;
 
@@ -134,7 +154,7 @@ export class ComprovantePagamentoProvider extends BaseScraper {
         status: 'success',
       });
 
-      // ── 4. Copy file to local documents folder ──────────────────────────────
+      // ── 4. Copy file to local documents folder ─────────────────────────────
       const docsDir = path.join(process.cwd(), 'documents', 'comprovante-pagamento');
       const finalPath = path.join(docsDir, fileName);
 
@@ -169,19 +189,12 @@ export class ComprovantePagamentoProvider extends BaseScraper {
         status: 'success',
       });
 
-      // ── 5. Open the file ────────────────────────────────────────────────────
-      await this.openDocument(finalPath);
-
       return {
         type: 'file',
         filePath: finalPath,
         mimeType: 'image/png',
         sizeBytes,
       } satisfies FileResult;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      this.logger.error({ err }, 'ComprovantePagamentoProvider failed');
-      return { type: 'error', message, cause: err } satisfies ErrorResult;
     } finally {
       if (ownsDaemon && daemon) {
         daemon.kill();
