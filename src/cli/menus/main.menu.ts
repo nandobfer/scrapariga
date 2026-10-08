@@ -50,7 +50,7 @@ export async function showMainMenu(): Promise<MainMenuResult> {
       if (numberSelected) { term('\n'); resolve(numberSelected); return; }
       if (res.canceled) { term('\n'); process.exit(0); }
       resolve(mapping[res.selectedIndex]);
-    }) as { stop: (erase: boolean) => void };
+    }) as unknown as { stop: (erase: boolean) => void };
 
     term.on('key', keyHandler);
   });

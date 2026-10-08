@@ -32,3 +32,10 @@ Thumbs.db
 
 # Debug screenshots
 screenshots/
+
+# Zeev persistent browser profile (SSO session cookies)
+.zeev-profile/
+.cortexkit/magic-context/
+
+# Sample fiscal document (contains real company data)
+exemplo-nf.pdf

@@ -54,7 +54,7 @@ export async function showContasMenu(): Promise<SubMenuResult> {
       if (numberSelected) { term('\n'); resolve(numberSelected); return; }
       if (res.canceled) { term('\n'); process.exit(0); }
       resolve(MAPPING[res.selectedIndex]);
-    }) as { stop: (erase: boolean) => void };
+    }) as unknown as { stop: (erase: boolean) => void };
 
     term.on('key', keyHandler);
   });
