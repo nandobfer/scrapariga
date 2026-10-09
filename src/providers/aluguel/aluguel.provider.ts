@@ -1,27 +1,34 @@
 /**
  * aluguel.provider.ts — Boleto de aluguel via anticoimoveis.com.br.
  *
- * URL: https://anticoimoveis.com.br/cobrancas?pid=<base64(numericId)>
+ * The portal used to expose boletos at `https://anticoimoveis.com.br/cobrancas?pid=<base64(numericId)>`,
+ * where the PID was simply `base64(<parcelaId>)`. That URL format is gone: the
+ * share link is now `?pid=base64("v2:<parcelaId>:<token>")`, where `<token>` is an
+ * opaque per-boleto value that cannot be derived — so URLs can no longer be built
+ * from a numeric id, and the old page-navigation probe never resolves.
  *
- * PIDs are sequential integers encoded as Base64. Two known reference points
- * anchor the calculation; the current month's PID is derived from them:
+ * The backing AJAX endpoint, however, still accepts the plain numeric id, so the
+ * provider discovers the boleto over HTTP instead of rendering the share page:
  *
- *   PID 34849 → vencimento 10/03/2026  (março 2026)
- *   PID 34850 → vencimento 10/04/2026  (abril 2026)
+ *   POST task=finangerarcobrancas.imprimir (cid[]=<parcelaId>) → boleto JSON
+ *        (numero_contrato, linha_digitavel, valor_boleto, data_vencimento, fileurl, …)
+ *   GET  task=ajax.getParcelaInfo (parcela_id=<parcelaId>)     → parcela details HTML;
+ *        a paid parcela contains a "Data Pagamento" row, an open one does not.
+ *
+ * Parcela ids are sequential per contract, +1 per monthly installment. One known
+ * reference point anchors the calculation:
+ *
+ *   PID 39127 → vencimento 13/10/2026  (outubro 2026, contrato 1230104)
  *
  * Formula: basePid = REFERENCE_PID + monthsElapsed(REFERENCE_YEAR, REFERENCE_MONTH)
  * No credentials required — the PID is computed automatically from the current date.
+ * The contract number is read from ALUGUEL_CONTRACT (.env); the reference anchor
+ * below belongs to that contract's id sequence and must match it.
  *
  * Flow (inside run()):
- *   findPendingBoleto() → probe PIDs until unpaid boleto found
+ *   findPendingBoleto() → probe parcela ids until an open boleto for EXPECTED_CONTRACT is found
  *   readBoletoData()    → POST finangerarcobrancas.imprimir → linha digitável, valor, vencimento, PDF URL
  *   fetchPdf()          → download the PDF fileurl returned by the portal
- *
- * Endpoints / selectors (confirmed via browser DevTools on anticoimoveis.com.br):
- *   #dropdownMenuButton                                       → AÇÕES dropdown toggle (existence check)
- *   input[name="parcela_id"] (hidden row input)               → boleto/parcela id (== PID)
- *   POST task=finangerarcobrancas.imprimir (cid[]=<parcela>)  → boleto JSON (linha_digitavel, fileurl, …)
- *   .table tbody tr td                                        → Table row cells
  */
 
 import path from 'node:path';
@@ -30,24 +37,30 @@ import type { Logger } from 'pino';
 import { BaseScraper, type BrowserService } from '../base-scraper.js';
 import type { EnvCredential, ProgressCallback, ScraperResult } from '../interfaces.js';
 
-const BASE_URL = 'https://anticoimoveis.com.br/cobrancas';
 const IMPRIMIR_URL =
   'https://anticoimoveis.com.br/index.php?option=com_widesys&task=finangerarcobrancas.imprimir&format=raw&tmpl=component';
-const EXPECTED_CONTRACT = '1230103';
+const PARCELA_INFO_URL =
+  'https://anticoimoveis.com.br/index.php?option=com_widesys&view=ajax&format=raw&task=ajax.getParcelaInfo';
+
+// Contract whose boletos we fetch. Read from ALUGUEL_CONTRACT (.env) because the
+// portal renumbers contracts (e.g. a renewal changes 1230103 → 1230104).
 const MAX_PID_PROBE = 6;
 const ALLOWED_MIMES = ['application/pdf'];
 
 /** Subset of the `finangerarcobrancas.imprimir` JSON response we rely on. */
 interface BoletoResponse {
   success?: boolean;
-  data?: Array<{
-    linha_digitavel?: string;
-    valor_boleto?: string;
-    valor_desconto?: string;
-    aplicar_descontos?: boolean;
-    data_vencimento?: string;
-    fileurl?: string;
-  }>;
+  data?: BoletoData[];
+}
+
+interface BoletoData {
+  numero_contrato?: string;
+  linha_digitavel?: string;
+  valor_boleto?: string;
+  valor_desconto?: string;
+  aplicar_descontos?: boolean;
+  data_vencimento?: string;
+  fileurl?: string;
 }
 
 /**
@@ -62,10 +75,10 @@ function parseMoneyToCents(value: string | undefined): number {
   return Number.isFinite(parsed) ? Math.round(parsed * 100) : 0;
 }
 
-// Reference anchor — both known PIDs must satisfy: REFERENCE_PID + offset == pid for that month.
-const REFERENCE_PID = 34849;    // boleto para março 2026
+// Reference anchor — satisfies: REFERENCE_PID + offset == parcelaId for that month.
+const REFERENCE_PID = 39127;    // boleto para outubro 2026 (contrato 1230104)
 const REFERENCE_YEAR = 2026;
-const REFERENCE_MONTH = 3;       // março (1-based)
+const REFERENCE_MONTH = 10;      // outubro (1-based)
 
 /**
  * Derive the expected PID for a given year/month based on our reference points.
@@ -175,6 +188,7 @@ export class AluguelProvider extends BaseScraper {
   async findPendingBoleto(page: Page): Promise<number> {
     this.emitStep({ stepId: 'login', label: 'Procurando boleto pendente...', status: 'pending' });
 
+    const expectedContract = this.requiredContract();
     const now = new Date();
     // The due date is the 10th of each month; if today is past the 10th the
     // boleto is likely already paid — start one month ahead.
@@ -185,35 +199,23 @@ export class AluguelProvider extends BaseScraper {
 
     this.logger.info({ basePid, startYear, normalizedMonth }, 'Computed base PID');
 
-    for (let candidate = basePid; candidate <= basePid + MAX_PID_PROBE; candidate++) {
+    const lastPid = basePid + MAX_PID_PROBE;
+    for (let candidate = basePid; candidate <= lastPid; candidate++) {
       this.emitStep({ stepId: 'login', label: `Verificando PID ${candidate}...`, status: 'pending' });
 
-      const pid = Buffer.from(String(candidate)).toString('base64');
-      const url = `${BASE_URL}?pid=${pid}`;
+      const data = await this.fetchParcelaData(page, candidate);
+      if (!data) continue; // id inexistente ou sem boleto
 
-      try {
-        await page.goto(url, { waitUntil: 'networkidle', timeout: 15_000 });
-      } catch {
-        this.logger.warn({ candidate }, 'PID navigation failed; trying next');
+      if (data.numero_contrato !== expectedContract) {
+        this.emitStep({
+          stepId: 'login',
+          label: `PID ${candidate}: contrato ${data.numero_contrato ?? '?'}, ignorando`,
+          status: 'warning',
+        });
         continue;
       }
 
-      const isVisible = await page.locator('#dropdownMenuButton').isVisible().catch(() => false);
-      if (!isVisible) continue;
-
-      const row = page.locator('.table tbody tr').first();
-      const rowText = await row.textContent({ timeout: 5_000 }).catch(() => '');
-      if (!rowText) continue;
-
-      if (!rowText.includes(EXPECTED_CONTRACT)) {
-        this.emitStep({ stepId: 'login', label: `PID ${candidate}: contrato diferente, ignorando`, status: 'warning' });
-        continue;
-      }
-
-      const tds = await row.locator('td').all();
-      if (tds.length === 0) continue;
-      const lastCell = (await tds[tds.length - 1].textContent().catch(() => ''))?.trim() ?? '';
-      if (lastCell !== '0,00') {
+      if (await this.isParcelaPaid(page, candidate)) {
         this.emitStep({ stepId: 'login', label: `PID ${candidate}: já pago, tentando próximo...`, status: 'pending' });
         continue;
       }
@@ -223,9 +225,47 @@ export class AluguelProvider extends BaseScraper {
     }
 
     throw new Error(
-      `Nenhum boleto pendente encontrado após verificar ${MAX_PID_PROBE} PIDs a partir de ${basePid}. ` +
+      `Nenhum boleto pendente encontrado após verificar ${MAX_PID_PROBE + 1} PIDs a partir de ${basePid}. ` +
         'Verifique se há boleto em aberto no anticoimoveis.com.br',
     );
+  }
+
+  /**
+   * Contract number whose boletos we fetch, from ALUGUEL_CONTRACT (.env).
+   * Fails fast with a clear message instead of silently matching nothing.
+   */
+  private requiredContract(): string {
+    const contract = process.env['ALUGUEL_CONTRACT'];
+    if (!contract) {
+      throw new Error(
+        'ALUGUEL_CONTRACT não definido. Adicione ALUGUEL_CONTRACT=<número do contrato> ao .env ' +
+          '(veja .env.example).',
+      );
+    }
+    return contract;
+  }
+
+  /**
+   * Fetch the boleto JSON for a parcela id via the portal's `imprimir` endpoint.
+   * Returns null when the id does not correspond to a boleto.
+   */
+  private async fetchParcelaData(page: Page, parcela: number): Promise<BoletoData | null> {
+    const response = await page.request.post(IMPRIMIR_URL, {
+      form: { 'cid[]': String(parcela) },
+    });
+    const json = (await response.json()) as BoletoResponse;
+    if (!json.success) return null;
+    return json.data?.[0] ?? null;
+  }
+
+  /**
+   * A parcela counts as paid when its detail panel exposes a "Data Pagamento"
+   * row; the portal omits that row while the boleto is still open.
+   */
+  private async isParcelaPaid(page: Page, parcela: number): Promise<boolean> {
+    const response = await page.request.get(`${PARCELA_INFO_URL}&parcela_id=${String(parcela)}`);
+    const html = await response.text();
+    return html.includes('Data Pagamento');
   }
 
   // ─── Step 2: Read boleto data (linha digitável, value, due date) ──────────

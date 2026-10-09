@@ -46,9 +46,16 @@ if (!fs.existsSync(execPath)) {
   console.log(`✓ Chromium already installed at:\n  ${execPath}`);
 }
 
-// ─── 2. Detect missing system libraries via ldd ────────────────────────────
+// ─── 2. Detect missing system libraries via ldd (Linux only) ──────────────
+// Windows and macOS bundle their own libraries; ldd/sudo do not exist there.
 
 const binaryPath = chromium.executablePath();
+
+if (process.platform !== 'linux') {
+  console.log('\n✓ Playwright is ready (no system libraries to check on this platform).');
+  process.exit(0);
+}
+
 const ldd = spawnSync('ldd', [binaryPath], { encoding: 'utf-8' });
 const lddOutput = (ldd.stdout ?? '') + (ldd.stderr ?? '');
 

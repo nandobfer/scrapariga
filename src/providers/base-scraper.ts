@@ -240,8 +240,12 @@ export abstract class BaseScraper {
 
   /**
    * Opens a local file with the OS default application.
-   * Under WSL the path is translated to a Windows path first; on native Linux
-   * xdg-open is used as a fallback.
+   *   - WSL      → translate the path and use explorer.exe
+   *   - Windows  → `cmd /c start` (xdg-open doesn't exist here)
+   *   - macOS    → open
+   *   - Linux    → xdg-open
+   * Spawn failures are logged instead of crashing the process (the child is
+   * detached, so an unhandled 'error' event would otherwise take the app down).
    */
   protected async openDocument(filePath: string): Promise<void> {
     let target = filePath;
@@ -258,8 +262,28 @@ export abstract class BaseScraper {
       });
     });
 
-    const bin = isWsl ? 'explorer.exe' : 'xdg-open';
-    spawn(bin, [target], { detached: true, stdio: 'ignore' }).unref();
+    let bin: string;
+    let args: string[];
+    if (isWsl) {
+      bin = 'explorer.exe';
+      args = [target];
+    } else if (process.platform === 'win32') {
+      // `start` is a cmd builtin; the empty "" is the (optional) window title.
+      bin = 'cmd';
+      args = ['/c', 'start', '', target];
+    } else if (process.platform === 'darwin') {
+      bin = 'open';
+      args = [target];
+    } else {
+      bin = 'xdg-open';
+      args = [target];
+    }
+
+    const child = spawn(bin, args, { detached: true, stdio: 'ignore' });
+    child.on('error', (err) => {
+      this.logger.warn({ err, bin, target }, 'Failed to open document with default app');
+    });
+    child.unref();
     this.logger.info({ filePath, target, bin }, 'Opened document');
   }
 

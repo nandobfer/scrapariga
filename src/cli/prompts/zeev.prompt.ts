@@ -122,9 +122,22 @@ function expandHome(p: string): string {
 }
 
 function openExternal(url: string): void {
-  const bin = process.platform === 'darwin' ? 'open' : 'xdg-open';
+  let bin: string;
+  let args: string[];
+  if (process.platform === 'win32') {
+    bin = 'cmd';
+    args = ['/c', 'start', '', url];
+  } else if (process.platform === 'darwin') {
+    bin = 'open';
+    args = [url];
+  } else {
+    bin = 'xdg-open';
+    args = [url];
+  }
   try {
-    spawn(bin, [url], { detached: true, stdio: 'ignore' }).unref();
+    const child = spawn(bin, args, { detached: true, stdio: 'ignore' });
+    child.on('error', () => undefined);
+    child.unref();
   } catch {
     // Best-effort: the URL is also printed to the terminal.
   }

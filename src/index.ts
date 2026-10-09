@@ -9,6 +9,7 @@
 import 'dotenv/config';
 import { spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pino } from 'pino';
 import { chromium } from 'playwright';
@@ -36,6 +37,7 @@ import type { ScraperResult } from './providers/interfaces.js';
 import terminal from 'terminal-kit';
 
 const term = terminal.terminal;
+const require = createRequire(import.meta.url);
 
 // ─── Logger ────────────────────────────────────────────────────────────────
 
@@ -248,8 +250,10 @@ async function checkPlaywright(): Promise<void> {
   const binaryPath = chromium.executablePath();
   const binaryMissing = !fs.existsSync(binaryPath);
 
+  // `ldd` only exists on Linux. On Windows/macOS the browser bundles its own
+  // libraries, so there is nothing to check here.
   let libsMissing = false;
-  if (!binaryMissing) {
+  if (!binaryMissing && process.platform === 'linux') {
     const ldd = spawnSync('ldd', [binaryPath], { encoding: 'utf-8' });
     const output = (ldd.stdout ?? '') + (ldd.stderr ?? '');
     libsMissing = output.includes('not found');
@@ -263,9 +267,14 @@ async function checkPlaywright(): Promise<void> {
     term.yellow('\n⚠️  Dependências do sistema para o Playwright estão faltando. Executando setup...\n');
   }
 
+  // Run the setup script through the Node binary and the installed `tsx` CLI.
+  // Spawning `npx` directly fails with ENOENT on Windows (npx is a .cmd shim),
+  // so we resolve tsx from node_modules and run it with the current executable.
   const setupScript = path.resolve('scripts/setup-playwright.ts');
+  const tsxCli = require.resolve('tsx/cli');
   await new Promise<void>((resolve, reject) => {
-    const child = spawn('npx', ['tsx', setupScript], { stdio: 'inherit', shell: false });
+    const child = spawn(process.execPath, [tsxCli, setupScript], { stdio: 'inherit' });
+    child.on('error', reject);
     child.on('close', (code) => {
       if (code === 0) resolve();
       else reject(new Error(`playwright:setup encerrou com código ${String(code)}`));

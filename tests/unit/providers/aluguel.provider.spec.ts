@@ -1,8 +1,8 @@
 /**
  * aluguel.provider.spec.ts — Unit tests for AluguelProvider.
  *
- * Tests the Playwright interaction flow with a mocked Page object.
- * All browser calls and HTTP calls are intercepted; no network access occurs.
+ * Tests the portal interaction flow with a mocked Page (APIRequestContext only).
+ * All HTTP calls are intercepted; no network access occurs.
  * No credentials are required — the PID is computed from the current date.
  */
 
@@ -21,45 +21,45 @@ const mockBrowserService: BrowserService = {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function makeLocatorStub(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  const stub: Record<string, unknown> = {
-    waitFor: vi.fn().mockResolvedValue(undefined),
-    click: vi.fn().mockResolvedValue(undefined),
-    isVisible: vi.fn().mockResolvedValue(true),
-    textContent: vi.fn().mockResolvedValue(''),
-    getAttribute: vi.fn().mockResolvedValue(null),
-    all: vi.fn().mockResolvedValue([]),
-    first: vi.fn(),
-    ...overrides,
-  };
-  (stub.first as ReturnType<typeof vi.fn>).mockReturnValue(stub);
-  return stub;
+type FakeJson = { success: boolean; data?: Array<Record<string, unknown>> };
+
+interface HttpPageOptions {
+  /** Response for POST finangerarcobrancas.imprimir for a given parcela id. */
+  dataFor?: (cid: number) => FakeJson;
+  /** Whether GET ajax.getParcelaInfo reports the parcela as paid. */
+  paidFor?: (cid: number) => boolean;
+  /** Raw HTML returned by ajax.getParcelaInfo (overrides paidFor). */
+  infoFor?: (cid: number) => string;
 }
 
-function makeRowStub(text: string, lastCellText: string): Record<string, unknown> {
-  const lastTd = makeLocatorStub({ textContent: vi.fn().mockResolvedValue(lastCellText) });
-  const row = makeLocatorStub({
-    textContent: vi.fn().mockResolvedValue(text),
-    locator: vi.fn().mockReturnValue(
-      makeLocatorStub({ all: vi.fn().mockResolvedValue([lastTd]) }),
-    ),
-  });
-  return row;
+function makeHttpPage(options: HttpPageOptions = {}): { page: Page; requested: number[] } {
+  const requested: number[] = [];
+  const page = {
+    request: {
+      post: vi.fn().mockImplementation((_url: string, arg: { form: Record<string, string> }) => {
+        const cid = Number(arg.form['cid[]']);
+        requested.push(cid);
+        const body = options.dataFor?.(cid) ?? { success: false, data: [] };
+        return Promise.resolve({ json: () => Promise.resolve(body) });
+      }),
+      get: vi.fn().mockImplementation((url: string) => {
+        const match = /parcela_id=(\d+)/.exec(url);
+        const cid = Number(match?.[1]);
+        const html = options.infoFor
+          ? options.infoFor(cid)
+          : options.paidFor?.(cid)
+            ? '<tr><td>Data Pagamento</td></tr>'
+            : '<tr><td>Referente</td></tr>';
+        return Promise.resolve({ text: () => Promise.resolve(html) });
+      }),
+    },
+  };
+  return { page: page as unknown as Page, requested };
 }
 
-function makeValidPage(rowText = 'Locacao: Contrato - 1230103 10-04-2026 2.496,69  0,00') {
-  const tableRow = makeRowStub(rowText, '0,00');
-  const dropdownBtn = makeLocatorStub({ isVisible: vi.fn().mockResolvedValue(true) });
-  return {
-    goto: vi.fn().mockResolvedValue(undefined),
-    locator: vi.fn().mockImplementation((sel: string) => {
-      if (sel === '#dropdownMenuButton') return dropdownBtn;
-      if (sel.includes('tbody tr')) return tableRow;
-      return makeLocatorStub();
-    }),
-    waitForSelector: vi.fn().mockResolvedValue(undefined),
-    once: vi.fn(),
-  };
+/** imprimir response for an open boleto of the given contract. */
+function openBoleto(cid: number, contract = '1230104'): FakeJson {
+  return { success: true, data: [{ id: cid, numero_contrato: contract }] };
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -70,6 +70,7 @@ describe('AluguelProvider', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useRealTimers();
+    process.env['ALUGUEL_CONTRACT'] = '1230104';
     provider = new AluguelProvider(mockBrowserService, logger);
   });
 
@@ -85,178 +86,90 @@ describe('AluguelProvider', () => {
 
   // ─── PID derivation ───────────────────────────────────────────────────────
 
-  describe('PID derivation from reference points', () => {
-    it('derives PID 34849 for March 2026 (reference anchor)', async () => {
-      vi.setSystemTime(new Date('2026-03-05T10:00:00'));
-      const mockPage = makeValidPage('Locacao: Contrato - 1230103 10-03-2026 3.059,19  0,00');
-
-      await provider.findPendingBoleto(mockPage as unknown as Page);
-
-      const expectedPid = Buffer.from('34849').toString('base64');
-      expect(mockPage.goto).toHaveBeenCalledWith(
-        `https://anticoimoveis.com.br/cobrancas?pid=${expectedPid}`,
-        expect.any(Object),
+  describe('PID derivation from the reference anchor', () => {
+    async function firstProbedPid(date: string): Promise<number | undefined> {
+      vi.setSystemTime(new Date(date));
+      const { page, requested } = makeHttpPage(); // all ids nonexistent
+      await expect(provider.findPendingBoleto(page)).rejects.toThrow(
+        'Nenhum boleto pendente encontrado',
       );
+      return requested[0];
+    }
+
+    it('derives PID 39127 for October 2026 (reference anchor)', async () => {
+      expect(await firstProbedPid('2026-10-05T10:00:00')).toBe(39127);
     });
 
-    it('derives PID 34850 for April 2026 (reference anchor)', async () => {
-      vi.setSystemTime(new Date('2026-04-02T10:00:00'));
-      const mockPage = makeValidPage();
-
-      await provider.findPendingBoleto(mockPage as unknown as Page);
-
-      const expectedPid = Buffer.from('34850').toString('base64');
-      expect(mockPage.goto).toHaveBeenCalledWith(
-        `https://anticoimoveis.com.br/cobrancas?pid=${expectedPid}`,
-        expect.any(Object),
-      );
+    it('derives PID 39128 for November 2026 (+1 from reference)', async () => {
+      expect(await firstProbedPid('2026-11-02T10:00:00')).toBe(39128);
     });
 
-    it('derives PID 34851 for May 2026 (+1 from April reference)', async () => {
-      vi.setSystemTime(new Date('2026-05-03T10:00:00'));
-      const mockPage = makeValidPage('Locacao: Contrato - 1230103 10-05-2026 3.059,19  0,00');
-
-      await provider.findPendingBoleto(mockPage as unknown as Page);
-
-      const expectedPid = Buffer.from('34851').toString('base64');
-      expect(mockPage.goto).toHaveBeenCalledWith(
-        `https://anticoimoveis.com.br/cobrancas?pid=${expectedPid}`,
-        expect.any(Object),
-      );
-    });
-
-    it('derives PID 34861 for March 2027 (+12 months from March 2026)', async () => {
-      vi.setSystemTime(new Date('2027-03-05T10:00:00'));
-      const mockPage = makeValidPage('Locacao: Contrato - 1230103 10-03-2027 3.059,19  0,00');
-
-      await provider.findPendingBoleto(mockPage as unknown as Page);
-
-      const expectedPid = Buffer.from('34861').toString('base64');
-      expect(mockPage.goto).toHaveBeenCalledWith(
-        `https://anticoimoveis.com.br/cobrancas?pid=${expectedPid}`,
-        expect.any(Object),
-      );
+    it('derives PID 39139 for October 2027 (+12 months from reference)', async () => {
+      expect(await firstProbedPid('2027-10-05T10:00:00')).toBe(39139);
     });
 
     it('starts one month ahead when run after the 10th (boleto likely already paid)', async () => {
-      // April 15: today > 10, should start probing May 2026 (PID 34851)
-      vi.setSystemTime(new Date('2026-04-15T10:00:00'));
-      const mockPage = makeValidPage('Locacao: Contrato - 1230103 10-05-2026 3.059,19  0,00');
-
-      await provider.findPendingBoleto(mockPage as unknown as Page);
-
-      const expectedPid = Buffer.from('34851').toString('base64');
-      expect(mockPage.goto).toHaveBeenCalledWith(
-        `https://anticoimoveis.com.br/cobrancas?pid=${expectedPid}`,
-        expect.any(Object),
-      );
+      // Oct 15: today > 10, should start probing November 2026 (PID 39128)
+      expect(await firstProbedPid('2026-10-15T10:00:00')).toBe(39128);
     });
   });
 
-  // ─── login() probe behaviour ───────────────────────────────────────────────
+  // ─── findPendingBoleto() probe behaviour ──────────────────────────────────
 
   describe('findPendingBoleto()', () => {
-    it('skips pages that do not show the dropdown (invalid PID)', async () => {
-      vi.setSystemTime(new Date('2026-04-02T10:00:00'));
+    it('returns the open boleto for the reference month', async () => {
+      vi.setSystemTime(new Date('2026-10-05T10:00:00'));
+      const { page } = makeHttpPage({ dataFor: (cid) => openBoleto(cid) });
 
-      const missingDropdown = makeLocatorStub({ isVisible: vi.fn().mockResolvedValue(false) });
-      const validRow = makeRowStub(
-        'Locacao: Contrato - 1230103 10-04-2026 2.496,69  0,00',
-        '0,00',
-      );
-      const validDropdown = makeLocatorStub({ isVisible: vi.fn().mockResolvedValue(true) });
-
-      let callCount = 0;
-      const mockPage = {
-        goto: vi.fn().mockResolvedValue(undefined),
-        locator: vi.fn().mockImplementation((sel: string) => {
-          if (sel === '#dropdownMenuButton') return callCount++ === 0 ? missingDropdown : validDropdown;
-          if (sel.includes('tbody tr')) return validRow;
-          return makeLocatorStub();
-        }),
-        waitForSelector: vi.fn().mockResolvedValue(undefined),
-        once: vi.fn(),
-      };
-
-      await provider.findPendingBoleto(mockPage as unknown as Page);
-
-      expect(mockPage.goto).toHaveBeenCalledTimes(2);
+      await expect(provider.findPendingBoleto(page)).resolves.toBe(39127);
     });
 
-    it('skips pages belonging to a different contract', async () => {
-      vi.setSystemTime(new Date('2026-04-02T10:00:00'));
+    it('skips nonexistent parcela ids', async () => {
+      vi.setSystemTime(new Date('2026-10-05T10:00:00'));
+      const { page, requested } = makeHttpPage({
+        dataFor: (cid) => (cid === 39127 ? { success: false, data: [] } : openBoleto(cid)),
+      });
 
-      const wrongRow = makeRowStub(
-        'Locacao: Contrato - 9999999 10-04-2026 2.496,69  0,00',
-        '0,00',
-      );
-      const rightRow = makeRowStub(
-        'Locacao: Contrato - 1230103 10-04-2026 2.496,69  0,00',
-        '0,00',
-      );
-      const dropdownBtn = makeLocatorStub({ isVisible: vi.fn().mockResolvedValue(true) });
-
-      let callCount = 0;
-      const mockPage = {
-        goto: vi.fn().mockResolvedValue(undefined),
-        locator: vi.fn().mockImplementation((sel: string) => {
-          if (sel === '#dropdownMenuButton') return dropdownBtn;
-          if (sel.includes('tbody tr')) return callCount++ === 0 ? wrongRow : rightRow;
-          return makeLocatorStub();
-        }),
-        waitForSelector: vi.fn().mockResolvedValue(undefined),
-        once: vi.fn(),
-      };
-
-      await provider.findPendingBoleto(mockPage as unknown as Page);
-
-      expect(mockPage.goto).toHaveBeenCalledTimes(2);
+      await expect(provider.findPendingBoleto(page)).resolves.toBe(39128);
+      expect(requested[0]).toBe(39127);
     });
 
-    it('skips already-paid boletos (Valor pago != 0,00)', async () => {
-      vi.setSystemTime(new Date('2026-04-02T10:00:00'));
+    it('skips boletos belonging to a different contract', async () => {
+      vi.setSystemTime(new Date('2026-10-05T10:00:00'));
+      const { page } = makeHttpPage({
+        dataFor: (cid) => openBoleto(cid, cid === 39127 ? '9999999' : '1230104'),
+      });
 
-      const paidRow = makeRowStub(
-        'Locacao: Contrato - 1230103 10-03-2026 2.496,69 09-03-2026 2.496,69',
-        '2.496,69',
-      );
-      const unpaidRow = makeRowStub(
-        'Locacao: Contrato - 1230103 10-04-2026 2.496,69  0,00',
-        '0,00',
-      );
-      const dropdownBtn = makeLocatorStub({ isVisible: vi.fn().mockResolvedValue(true) });
+      await expect(provider.findPendingBoleto(page)).resolves.toBe(39128);
+    });
 
-      let callCount = 0;
-      const mockPage = {
-        goto: vi.fn().mockResolvedValue(undefined),
-        locator: vi.fn().mockImplementation((sel: string) => {
-          if (sel === '#dropdownMenuButton') return dropdownBtn;
-          if (sel.includes('tbody tr')) return callCount++ === 0 ? paidRow : unpaidRow;
-          return makeLocatorStub();
-        }),
-        waitForSelector: vi.fn().mockResolvedValue(undefined),
-        once: vi.fn(),
-      };
+    it('skips already-paid boletos (Data Pagamento present)', async () => {
+      vi.setSystemTime(new Date('2026-10-05T10:00:00'));
+      const { page } = makeHttpPage({
+        dataFor: (cid) => openBoleto(cid),
+        paidFor: (cid) => cid === 39127,
+      });
 
-      await provider.findPendingBoleto(mockPage as unknown as Page);
-
-      expect(mockPage.goto).toHaveBeenCalledTimes(2);
+      await expect(provider.findPendingBoleto(page)).resolves.toBe(39128);
     });
 
     it('throws after exhausting all probe candidates', async () => {
-      vi.setSystemTime(new Date('2026-04-02T10:00:00'));
+      vi.setSystemTime(new Date('2026-10-05T10:00:00'));
+      const { page, requested } = makeHttpPage();
 
-      const dropdownBtn = makeLocatorStub({ isVisible: vi.fn().mockResolvedValue(false) });
-      const mockPage = {
-        goto: vi.fn().mockResolvedValue(undefined),
-        locator: vi.fn().mockReturnValue(dropdownBtn),
-        waitForSelector: vi.fn().mockResolvedValue(undefined),
-        once: vi.fn(),
-      };
+      await expect(provider.findPendingBoleto(page)).rejects.toThrow(
+        'Nenhum boleto pendente encontrado',
+      );
+      expect(requested).toHaveLength(7); // basePid .. basePid + MAX_PID_PROBE
+    });
 
-      await expect(
-        provider.findPendingBoleto(mockPage as unknown as Page),
-      ).rejects.toThrow('Nenhum boleto pendente encontrado');
+    it('throws a clear error when ALUGUEL_CONTRACT is not set', async () => {
+      delete process.env['ALUGUEL_CONTRACT'];
+      const { page } = makeHttpPage();
+
+      await expect(provider.findPendingBoleto(page)).rejects.toThrow(
+        'ALUGUEL_CONTRACT não definido',
+      );
     });
   });
 
@@ -281,11 +194,11 @@ describe('AluguelProvider', () => {
       });
       const mockPage = { request: { post } } as unknown as Page;
 
-      const data = await provider.readBoletoData(mockPage, 34856);
+      const data = await provider.readBoletoData(mockPage, 39127);
 
       expect(post).toHaveBeenCalledWith(
         expect.stringContaining('task=finangerarcobrancas.imprimir'),
-        { form: { 'cid[]': '34856' } },
+        { form: { 'cid[]': '39127' } },
       );
       expect(data.boletoCode).toBe('34191.09503 00557.633831 64000.550000 1 15980000313256');
       // R$ 3.132,56 − R$ 562,50 (desconto até o vencimento) = R$ 2.570,06
@@ -310,7 +223,7 @@ describe('AluguelProvider', () => {
       });
       const mockPage = { request: { post } } as unknown as Page;
 
-      const data = await provider.readBoletoData(mockPage, 34856);
+      const data = await provider.readBoletoData(mockPage, 39127);
 
       expect(data.amountCents).toBe(313256); // sem desconto
     });
@@ -324,7 +237,7 @@ describe('AluguelProvider', () => {
         },
       } as unknown as Page;
 
-      await expect(provider.readBoletoData(mockPage, 34856)).rejects.toThrow(
+      await expect(provider.readBoletoData(mockPage, 39127)).rejects.toThrow(
         'Falha ao gerar o boleto no portal',
       );
     });
